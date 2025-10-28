@@ -1,0 +1,24 @@
+/* Custom Scrollbar for Dark Sidebar */
+.sidebar-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-track {
+  background: #0B2545;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-thumb {
+  background: #13315C;
+  border-radius: 3px;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #1e4a73;
+}
+
+/* Smooth scroll behavior */
+.sidebar-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #13315C #0B2545;
+}
+

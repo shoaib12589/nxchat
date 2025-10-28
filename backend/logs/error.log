@@ -1,0 +1,20 @@
+[2025-01-25 00:00:00] ERROR: Database connection failed - retrying in 5 seconds
+[2025-01-25 00:00:05] ERROR: Redis connection timeout
+[2025-01-25 00:00:10] ERROR: Failed to authenticate user: invalid credentials
+[2025-01-25 00:00:15] ERROR: File upload failed: insufficient storage space
+[2025-01-25 00:00:20] ERROR: Email service unavailable
+[2025-01-25 00:00:25] ERROR: Socket connection lost
+[2025-01-25 00:00:30] ERROR: API rate limit exceeded
+[2025-01-25 00:00:35] ERROR: Database query timeout
+[2025-01-25 00:00:40] ERROR: Memory allocation failed
+[2025-01-25 00:00:45] ERROR: SSL certificate expired
+[2025-01-25 00:00:50] ERROR: Backup process failed
+[2025-01-25 00:00:55] ERROR: Cache write failed
+[2025-01-25 00:01:00] ERROR: Widget initialization failed
+[2025-01-25 00:01:05] ERROR: AI service unavailable
+[2025-01-25 00:01:10] ERROR: Payment processing failed
+[2025-01-25 00:01:15] ERROR: File system read error
+[2025-01-25 00:01:20] ERROR: Network timeout
+[2025-01-25 00:01:25] ERROR: Authentication token expired
+[2025-01-25 00:01:30] ERROR: Database migration failed
+[2025-01-25 00:01:35] ERROR: System overload detected

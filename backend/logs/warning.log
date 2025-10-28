@@ -1,0 +1,19 @@
+[2025-01-25 00:00:00] WARN: High memory usage detected: 85%
+[2025-01-25 00:00:05] WARN: Database connection pool near capacity
+[2025-01-25 00:00:10] WARN: Slow query detected: 2.5s execution time
+[2025-01-25 00:00:15] WARN: Cache hit rate below threshold: 60%
+[2025-01-25 00:00:20] WARN: Disk space low: 15% remaining
+[2025-01-25 00:00:25] WARN: CPU usage high: 90%
+[2025-01-25 00:00:30] WARN: Unusual traffic pattern detected
+[2025-01-25 00:00:35] WARN: SSL certificate expires in 30 days
+[2025-01-25 00:00:40] WARN: Backup size larger than expected
+[2025-01-25 00:00:45] WARN: Redis memory usage: 80%
+[2025-01-25 00:00:50] WARN: Database index fragmentation detected
+[2025-01-25 00:00:55] WARN: Long-running query detected
+[2025-01-25 00:01:00] WARN: API response time above threshold
+[2025-01-25 00:01:05] WARN: Widget load time exceeded limit
+[2025-01-25 00:01:10] WARN: Email queue backlog: 50 messages
+[2025-01-25 00:01:15] WARN: File system fragmentation
+[2025-01-25 00:01:20] WARN: Network latency increased
+[2025-01-25 00:01:25] WARN: Authentication attempts exceeded limit
+[2025-01-25 00:01:30] WARN: System resources under pressure

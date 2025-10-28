@@ -1,0 +1,45 @@
+[2025-01-25 00:00:00] INFO: NxChat server started successfully
+[2025-01-25 00:00:01] INFO: Database connection established
+[2025-01-25 00:00:02] INFO: Redis connection established
+[2025-01-25 00:00:03] INFO: Socket.io server initialized
+[2025-01-25 00:00:04] INFO: All routes loaded successfully
+[2025-01-25 00:00:05] INFO: Server listening on port 3001
+[2025-01-25 00:01:00] INFO: User authentication successful for user ID: 1
+[2025-01-25 00:01:30] INFO: New chat session created for visitor: visitor_abc123
+[2025-01-25 00:02:00] INFO: Agent joined chat session: chat_456
+[2025-01-25 00:02:30] INFO: Message sent in chat: chat_456
+[2025-01-25 00:03:00] INFO: Chat session ended: chat_456
+[2025-01-25 00:03:30] INFO: Widget loaded for tenant: 4
+[2025-01-25 00:04:00] INFO: System status check completed
+[2025-01-25 00:04:30] INFO: Cache cleared successfully
+[2025-01-25 00:05:00] INFO: Database backup completed
+[2025-01-25 00:05:30] INFO: Performance optimization applied
+[2025-01-25 00:06:00] INFO: New company registered: TechCorp Solutions
+[2025-01-25 00:06:30] INFO: Subscription plan updated for company: 1
+[2025-01-25 00:07:00] INFO: AI training data processed
+[2025-01-25 00:07:30] INFO: Email notification sent to user: john@example.com
+[2025-01-25 00:08:00] INFO: File upload completed: document.pdf
+[2025-01-25 00:08:30] INFO: Visitor activity tracked: page_view
+[2025-01-25 00:09:00] INFO: System health check passed
+[2025-01-25 00:09:30] INFO: Memory usage: 45.2MB
+[2025-01-25 00:10:00] INFO: CPU usage: 12.5%
+[2025-01-25 00:10:30] INFO: Database query optimization applied
+[2025-01-25 00:11:00] INFO: Redis cache hit rate: 85.3%
+[2025-01-25 00:11:30] INFO: Socket connection established: socket_xyz789
+[2025-01-25 00:12:00] INFO: Widget snippet generated for tenant: 4
+[2025-01-25 00:12:30] INFO: Agent status updated: online
+[2025-01-25 00:13:00] INFO: Visitor message received: "Hello, I need help"
+[2025-01-25 00:13:30] INFO: AI response generated for visitor
+[2025-01-25 00:14:00] INFO: Chat transfer initiated to agent: agent_123
+[2025-01-25 00:14:30] INFO: File download completed: manual.pdf
+[2025-01-25 00:15:00] INFO: System maintenance completed
+[2025-01-25 00:15:30] INFO: Database indexes optimized
+[2025-01-25 00:16:00] INFO: Cache warming completed
+[2025-01-25 00:16:30] INFO: Performance metrics collected
+[2025-01-25 00:17:00] INFO: Security scan completed
+[2025-01-25 00:17:30] INFO: Backup verification successful
+[2025-01-25 00:18:00] INFO: System uptime: 18 minutes
+[2025-01-25 00:18:30] INFO: Active connections: 15
+[2025-01-25 00:19:00] INFO: Memory cleanup completed
+[2025-01-25 00:19:30] INFO: Garbage collection completed
+[2025-01-25 00:20:00] INFO: System status: All services healthy
