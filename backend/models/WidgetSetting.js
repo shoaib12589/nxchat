@@ -65,6 +65,11 @@ const WidgetSetting = sequelize.define('WidgetSetting', {
     allowNull: true,
     defaultValue: ['speak to human', 'agent', 'representative']
   },
+  ai_welcome_message: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    defaultValue: null
+  },
   offline_message: {
     type: DataTypes.TEXT,
     allowNull: true,

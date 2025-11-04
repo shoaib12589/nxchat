@@ -147,6 +147,73 @@ export default function ProfilePage() {
     }));
   };
 
+  // Resize image to max 300x300 and attempt to keep under 200KB by adjusting quality
+  const resizeImageToLimit = (file: File): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 300;
+        const maxH = 300;
+        let { width, height } = img;
+        const scale = Math.min(1, maxW / width, maxH / height);
+        width = Math.floor(width * scale);
+        height = Math.floor(height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('Canvas not supported'));
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const tryQualities = [0.9, 0.8, 0.7, 0.6, 0.5];
+        const toBlobWithQuality = (qIndex: number) => {
+          const quality = tryQualities[qIndex] ?? 0.5;
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) return reject(new Error('Failed to create image blob'));
+              if (blob.size <= 200 * 1024 || qIndex === tryQualities.length - 1) {
+                resolve(blob);
+              } else {
+                toBlobWithQuality(qIndex + 1);
+              }
+            },
+            'image/jpeg',
+            quality
+          );
+        };
+        toBlobWithQuality(0);
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      const reader = new FileReader();
+      reader.onload = () => {
+        img.src = reader.result as string;
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const resized = await resizeImageToLimit(file);
+      const finalFile = new File([resized], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
+      const resp = await apiClient.uploadAgentImage(finalFile);
+      if (resp.success) {
+        setFormData(prev => ({ ...prev, avatar: resp.data.url }));
+        toast.success('Avatar uploaded');
+      } else {
+        toast.error(resp.message || 'Upload failed');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to process image');
+    } finally {
+      // reset input value to allow re-uploading same file if needed
+      e.currentTarget.value = '';
+    }
+  };
+
   const getRoleBadgeColor = (role: string) => {
     switch (role) {
       case 'super_admin':
@@ -333,6 +400,10 @@ export default function ProfilePage() {
                   <p className="text-sm text-muted-foreground">
                     Enter a URL to your profile picture
                   </p>
+                  <div className="mt-3 space-y-2">
+                    <Label htmlFor="avatarFile">Or upload an image (max 300x300, &lt;200KB)</Label>
+                    <Input id="avatarFile" name="avatarFile" type="file" accept="image/*" onChange={handleAvatarFileChange} disabled={loading} />
+                  </div>
                 </div>
 
                 <div className="flex justify-end">

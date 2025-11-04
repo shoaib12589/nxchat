@@ -30,6 +30,11 @@ const Plan = sequelize.define('Plan', {
     allowNull: false,
     defaultValue: 1
   },
+  max_brands: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 1
+  },
   allows_calls: {
     type: DataTypes.BOOLEAN,
     allowNull: false,

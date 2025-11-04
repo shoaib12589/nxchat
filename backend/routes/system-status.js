@@ -184,32 +184,260 @@ async function getSystemResources() {
   try {
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
     const cpus = os.cpus();
+    
+    // Get detailed CPU information
+    let cpuUsage = 0;
+    let cpuDetails = [];
+    try {
+      const cpuUsageData = await getDetailedCpuUsage();
+      cpuUsage = cpuUsageData.overall;
+      cpuDetails = cpuUsageData.cores;
+    } catch (error) {
+      console.warn('Could not get detailed CPU usage:', error.message);
+    }
+    
+    // Get disk information
+    const diskInfo = await getDiskInfo();
+    
+    // Get network information
+    const networkInfo = await getNetworkInfo();
     
     return {
       memory: {
         total: formatBytes(totalMem),
+        totalBytes: totalMem,
         free: formatBytes(freeMem),
-        used: formatBytes(totalMem - freeMem),
-        usagePercent: Math.round(((totalMem - freeMem) / totalMem) * 100)
+        freeBytes: freeMem,
+        used: formatBytes(usedMem),
+        usedBytes: usedMem,
+        usagePercent: Math.round((usedMem / totalMem) * 100),
+        available: formatBytes(freeMem),
+        cached: formatBytes(0), // Not available on all systems
+        buffers: formatBytes(0) // Not available on all systems
       },
       cpu: {
         cores: cpus.length,
-        model: cpus[0].model,
-        speed: `${cpus[0].speed} MHz`,
-        loadAverage: os.loadavg()
+        model: cpus[0]?.model || 'Unknown',
+        speed: `${cpus[0]?.speed || 0} MHz`,
+        speedMHz: cpus[0]?.speed || 0,
+        loadAverage: os.loadavg(),
+        usagePercent: cpuUsage,
+        details: cpuDetails
       },
+      disk: diskInfo,
+      network: networkInfo,
       os: {
         platform: os.platform(),
         release: os.release(),
         arch: os.arch(),
-        hostname: os.hostname()
+        hostname: os.hostname(),
+        type: os.type(),
+        version: os.version()
       },
-      uptime: formatUptime(os.uptime())
+      uptime: formatUptime(os.uptime()),
+      uptimeSeconds: Math.floor(os.uptime())
+    };
+  } catch (error) {
+    console.error('Error getting system resources:', error);
+    return {
+      error: error.message
+    };
+  }
+}
+
+// Get detailed CPU usage per core
+async function getDetailedCpuUsage() {
+  return new Promise((resolve) => {
+    const cpus = os.cpus();
+    const startMeasure = cpus.map(cpu => ({
+      user: cpu.times.user,
+      nice: cpu.times.nice,
+      sys: cpu.times.sys,
+      idle: cpu.times.idle,
+      irq: cpu.times.irq
+    }));
+    
+    setTimeout(() => {
+      const endMeasure = os.cpus();
+      const cores = endMeasure.map((cpu, index) => {
+        const start = startMeasure[index];
+        const total = (cpu.times.user - start.user) + 
+                     (cpu.times.nice - start.nice) + 
+                     (cpu.times.sys - start.sys) + 
+                     (cpu.times.idle - start.idle) + 
+                     (cpu.times.irq - start.irq);
+        const idle = cpu.times.idle - start.idle;
+        const usage = total > 0 ? Math.round(((total - idle) / total) * 100) : 0;
+        
+        return {
+          core: index,
+          usage: usage,
+          model: cpu.model,
+          speed: cpu.speed
+        };
+      });
+      
+      const overall = cores.reduce((sum, core) => sum + core.usage, 0) / cores.length;
+      
+      resolve({
+        overall: Math.round(overall),
+        cores: cores
+      });
+    }, 1000);
+  });
+}
+
+// Get disk information
+async function getDiskInfo() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Get disk usage for the root directory (or current working directory)
+    const rootPath = process.platform === 'win32' ? 'C:\\' : '/';
+    
+    // Try to get disk stats using a simple method
+    if (process.platform === 'win32') {
+      // On Windows, try to use PowerShell
+      try {
+        const stats = await execAsync('powershell -Command "Get-PSDrive -Name C | Select-Object -Property Used,Free | ConvertTo-Json"');
+        const driveInfo = JSON.parse(stats.stdout.trim());
+        
+        if (driveInfo.Used !== undefined && driveInfo.Free !== undefined) {
+          const used = driveInfo.Used;
+          const free = driveInfo.Free;
+          const total = used + free;
+          const percent = total > 0 ? Math.round((used / total) * 100) : 0;
+          
+          return {
+            total: formatBytes(total),
+            used: formatBytes(used),
+            free: formatBytes(free),
+            usagePercent: percent,
+            path: 'C:\\',
+            filesystem: 'NTFS'
+          };
+        }
+      } catch (error) {
+        console.warn('Could not get Windows disk info via PowerShell:', error.message);
+        // Try wmic as fallback
+        try {
+          const stats = await execAsync('wmic logicaldisk where "caption=\'C:\'" get size,freespace /format:value');
+          const lines = stats.stdout.trim().split('\n');
+          let size = 0;
+          let free = 0;
+          
+          lines.forEach(line => {
+            if (line.startsWith('Size=')) {
+              size = parseInt(line.split('=')[1]) || 0;
+            } else if (line.startsWith('FreeSpace=')) {
+              free = parseInt(line.split('=')[1]) || 0;
+            }
+          });
+          
+          if (size > 0 && free >= 0) {
+            const used = size - free;
+            const percent = Math.round((used / size) * 100);
+            
+            return {
+              total: formatBytes(size),
+              used: formatBytes(used),
+              free: formatBytes(free),
+              usagePercent: percent,
+              path: 'C:\\',
+              filesystem: 'NTFS'
+            };
+          }
+        } catch (wmicError) {
+          console.warn('Could not get Windows disk info via wmic:', wmicError.message);
+        }
+      }
+      
+      // Fallback: return basic info
+      return {
+        total: 'N/A',
+        used: 'N/A',
+        free: 'N/A',
+        usagePercent: 0,
+        path: rootPath,
+        note: 'Disk info unavailable - may require administrator privileges'
+      };
+    }
+    
+    // For Unix-like systems, try to read disk stats
+    try {
+      const stats = await execAsync(`df -h ${rootPath} | tail -1`);
+      const parts = stats.stdout.trim().split(/\s+/);
+      if (parts.length >= 5) {
+        const total = parts[1];
+        const used = parts[2];
+        const free = parts[3];
+        const percent = parseInt(parts[4].replace('%', ''));
+        
+        return {
+          total: total,
+          used: used,
+          free: free,
+          usagePercent: percent,
+          path: rootPath,
+          filesystem: parts[0]
+        };
+      }
+    } catch (error) {
+      console.warn('Could not get disk info:', error.message);
+    }
+    
+    return {
+      total: 'N/A',
+      used: 'N/A',
+      free: 'N/A',
+      usagePercent: 0,
+      path: rootPath
     };
   } catch (error) {
     return {
+      total: 'N/A',
+      used: 'N/A',
+      free: 'N/A',
+      usagePercent: 0,
       error: error.message
+    };
+  }
+}
+
+// Get network information
+async function getNetworkInfo() {
+  try {
+    const networkInterfaces = os.networkInterfaces();
+    const interfaces = [];
+    
+    for (const [name, addresses] of Object.entries(networkInterfaces)) {
+      if (!addresses) continue;
+      
+      for (const addr of addresses) {
+        if (addr.family === 'IPv4' && !addr.internal) {
+          interfaces.push({
+            name: name,
+            address: addr.address,
+            netmask: addr.netmask,
+            mac: addr.mac,
+            family: addr.family
+          });
+        }
+      }
+    }
+    
+    return {
+      interfaces: interfaces,
+      hostname: os.hostname(),
+      primary: interfaces[0] || null
+    };
+  } catch (error) {
+    return {
+      error: error.message,
+      interfaces: []
     };
   }
 }

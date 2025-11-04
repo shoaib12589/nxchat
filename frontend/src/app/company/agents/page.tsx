@@ -138,7 +138,13 @@ export default function AgentsPage() {
         fetchAgents();
       }
     } catch (error: any) {
-      toast.error(error.message || 'Failed to create agent');
+      if (error.response?.data?.limit_reached) {
+        toast.error(error.response.data.message || 'Agent limit reached');
+        // Optionally navigate to billing page
+        // router.push('/company/billing');
+      } else {
+        toast.error(error.message || 'Failed to create agent');
+      }
     } finally {
       setSubmitting(false);
     }

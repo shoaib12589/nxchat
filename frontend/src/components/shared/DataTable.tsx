@@ -74,9 +74,10 @@ export function DataTable<T extends Record<string, any>>({
     if (!searchTerm) return true;
     
     return columns.some((column) => {
-      const value = column.key.includes('.') 
-        ? column.key.split('.').reduce((obj, key) => obj?.[key], item)
-        : item[column.key];
+      const keyStr = String(column.key);
+      const value = keyStr.includes('.') 
+        ? keyStr.split('.').reduce((obj: any, key: string) => obj?.[key], item as any)
+        : item[column.key as keyof T];
       
       return String(value).toLowerCase().includes(searchTerm.toLowerCase());
     });
@@ -86,11 +87,11 @@ export function DataTable<T extends Record<string, any>>({
     if (!sortField) return 0;
     
     const aValue = sortField.includes('.') 
-      ? sortField.split('.').reduce((obj, key) => obj?.[key], a)
-      : a[sortField];
+      ? sortField.split('.').reduce((obj: any, key: string) => obj?.[key], a as any)
+      : a[sortField as keyof T];
     const bValue = sortField.includes('.') 
-      ? sortField.split('.').reduce((obj, key) => obj?.[key], b)
-      : b[sortField];
+      ? sortField.split('.').reduce((obj: any, key: string) => obj?.[key], b as any)
+      : b[sortField as keyof T];
     
     if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
     if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
@@ -99,9 +100,9 @@ export function DataTable<T extends Record<string, any>>({
 
   const getValue = (item: T, key: string) => {
     if (key.includes('.')) {
-      return key.split('.').reduce((obj, k) => obj?.[k], item);
+      return key.split('.').reduce((obj: any, k: string) => obj?.[k], item as any);
     }
-    return item[key];
+    return item[key as keyof T];
   };
 
   if (loading) {

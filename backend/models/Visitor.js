@@ -32,7 +32,7 @@ const Visitor = sequelize.define('Visitor', {
     allowNull: true
   },
   status: {
-    type: DataTypes.ENUM('online', 'away', 'offline', 'idle'),
+    type: DataTypes.ENUM('online', 'away', 'offline', 'idle', 'waiting_for_agent'),
     defaultValue: 'idle'
   },
   current_page: {
@@ -164,6 +164,11 @@ const Visitor = sequelize.define('Visitor', {
     type: DataTypes.DATE,
     allowNull: true,
     comment: 'Last time visitor interacted with chat widget (opened/minimized)'
+  },
+  widget_status: {
+    type: DataTypes.ENUM('minimized', 'maximized'),
+    allowNull: true,
+    comment: 'Current widget status (minimized or maximized)'
   }
 }, {
   tableName: 'visitors',

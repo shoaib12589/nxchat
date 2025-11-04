@@ -187,6 +187,9 @@ If you prefer to run servers separately:
 cd backend
 npm install
 npm run dev
+
+
+file:///C:/Users/Muhammad%20Shoaib/Desktop/code/shoaib/index.html
 ```
 
 taskkill /F /IM node.exe

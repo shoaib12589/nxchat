@@ -25,7 +25,13 @@ const ChatBubbleComponent: React.FC<ChatBubbleProps> = ({
   // Memoize expensive computations
   const senderInitials = useMemo(() => {
     if (!message.sender) return 'U';
-    return `${message.sender.first_name?.[0] || ''}${message.sender.last_name?.[0] || ''}`.toUpperCase();
+    // Use name property and extract initials
+    const name = message.sender.name || '';
+    const nameParts = name.trim().split(/\s+/);
+    if (nameParts.length >= 2) {
+      return `${nameParts[0][0] || ''}${nameParts[1][0] || ''}`.toUpperCase();
+    }
+    return name[0]?.toUpperCase() || 'U';
   }, [message.sender]);
 
   const formattedTimestamp = useMemo(() => {
@@ -113,7 +119,7 @@ const ChatBubbleComponent: React.FC<ChatBubbleProps> = ({
       {/* Avatar */}
       {showAvatar && (
         <Avatar className="w-8 h-8 flex-shrink-0">
-          <AvatarImage src={message.sender?.avatar_url} />
+          <AvatarImage src={message.sender?.avatar} />
           <AvatarFallback>
             {senderInitials}
           </AvatarFallback>
@@ -129,7 +135,7 @@ const ChatBubbleComponent: React.FC<ChatBubbleProps> = ({
         {message.sender && !isOwn && (
           <div className="flex items-center space-x-2">
             <span className="text-xs font-medium text-muted-foreground">
-              {message.sender.first_name} {message.sender.last_name}
+              {message.sender.name || 'Unknown User'}
             </span>
             {message.sender.role === 'agent' && (
               <Badge variant="outline" className="text-xs">

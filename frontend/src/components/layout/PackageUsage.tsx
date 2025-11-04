@@ -221,22 +221,62 @@ export const PackageUsage: React.FC<PackageUsageProps> = ({ className }) => {
         <div className="space-y-2">
           <h4 className="text-xs font-medium text-muted-foreground">Plan Features</h4>
           <div className="space-y-1">
-            {plan.features && typeof plan.features === 'object' ? (
-              Object.entries(plan.features).map(([feature, enabled]) => (
-                <div key={feature} className="flex items-center gap-2 text-xs">
-                  {enabled ? (
+            {/* Parse features object */}
+            {(() => {
+              const features = typeof plan.features === 'string' 
+                ? JSON.parse(plan.features || '{}')
+                : (plan.features || {});
+
+              return (
+                <>
+                  {/* AI Enabled */}
+                  <div className="flex items-center gap-2 text-xs">
+                    {plan.ai_enabled ? (
+                      <CheckCircle className="h-3 w-3 text-green-600" />
+                    ) : (
+                      <XCircle className="h-3 w-3 text-muted-foreground" />
+                    )}
+                    <span>AI Enabled</span>
+                  </div>
+
+                  {/* AI Training */}
+                  <div className="flex items-center gap-2 text-xs">
+                    {features.ai_training === true ? (
+                      <CheckCircle className="h-3 w-3 text-green-600" />
+                    ) : (
+                      <XCircle className="h-3 w-3 text-muted-foreground" />
+                    )}
+                    <span>AI Training</span>
+                  </div>
+
+                  {/* AI Messages Limit - Show limit amount */}
+                  <div className="flex items-center gap-2 text-xs">
                     <CheckCircle className="h-3 w-3 text-green-600" />
-                  ) : (
-                    <XCircle className="h-3 w-3 text-muted-foreground" />
-                  )}
-                  <span className="capitalize">
-                    {feature.replace(/_/g, ' ')}
-                  </span>
-                </div>
-              ))
-            ) : (
-              <p className="text-xs text-muted-foreground">No features listed</p>
-            )}
+                    <span>AI Messages Limit: {formatNumber(plan.max_ai_messages || 0)}</span>
+                  </div>
+
+                  {/* Custom Branding */}
+                  <div className="flex items-center gap-2 text-xs">
+                    {features.custom_branding === true ? (
+                      <CheckCircle className="h-3 w-3 text-green-600" />
+                    ) : (
+                      <XCircle className="h-3 w-3 text-muted-foreground" />
+                    )}
+                    <span>Custom Branding</span>
+                  </div>
+
+                  {/* Grammar Checker */}
+                  <div className="flex items-center gap-2 text-xs">
+                    {features.grammar_checker === true ? (
+                      <CheckCircle className="h-3 w-3 text-green-600" />
+                    ) : (
+                      <XCircle className="h-3 w-3 text-muted-foreground" />
+                    )}
+                    <span>Grammar Checker</span>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
 

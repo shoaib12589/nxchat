@@ -89,6 +89,11 @@ const Ticket = sequelize.define('Ticket', {
   customer_feedback: {
     type: DataTypes.TEXT,
     allowNull: true
+  },
+  metadata: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: {}
   }
 }, {
   tableName: 'tickets'

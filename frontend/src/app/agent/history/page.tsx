@@ -1,320 +1,362 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Input } from '@/components/ui/input';
+import { 
+  Select, 
+  SelectContent, 
+  SelectItem, 
+  SelectTrigger, 
+  SelectValue 
+} from '@/components/ui/select';
+import { 
+  Users, 
+  Search, 
+  RefreshCw,
+  ChevronUp,
+  MapPin,
+  Calendar, 
+  Clock, 
+  MessageCircle, 
+  Eye,
+  X
+} from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { useAuthStore } from '@/stores/authStore';
 import apiClient from '@/lib/api';
 import { toast } from 'sonner';
-import { 
-  Search, 
-  Filter, 
-  Calendar, 
-  Clock, 
-  Star, 
-  User, 
-  MessageCircle, 
-  ChevronLeft, 
-  ChevronRight,
-  Download,
-  Eye,
-  MoreHorizontal,
-  Mail,
-  FileText,
-  X,
-  TrendingUp,
-  BarChart3,
-  RefreshCw,
-  Users
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
-import { EmptyState } from '@/components/shared/EmptyState';
 
-interface ChatHistory {
-  id: number;
-  status: 'closed' | 'completed' | 'visitor_left';
-  startedAt: string;
-  endedAt: string;
-  duration: number | null;
-  rating: number | null;
-  ratingFeedback: string | null;
-  customer: {
+interface Visitor {
     id: string;
     name: string;
-    email: string;
+  email?: string;
+  phone?: string;
     avatar?: string;
-  } | null;
-  agent: {
+  status: 'online' | 'away' | 'offline' | 'idle' | 'waiting_for_agent';
+  currentPage: string;
+  referrer: string;
+  location: {
+    country: string;
+    city: string;
+    region: string;
+  };
+  device: {
+    type: 'desktop' | 'mobile' | 'tablet';
+    browser: string;
+    os: string;
+  };
+  lastActivity: string;
+  sessionDuration: string;
+  messagesCount: number;
+  visitsCount: number;
+  assignedAgent?: {
     id: string;
     name: string;
-    email: string;
     avatar?: string;
-  } | null;
-  department: {
+  };
+  brand?: {
     id: number;
     name: string;
-  } | null;
-  lastMessage: {
-    id: number;
-    message: string;
-    createdAt: string;
-    senderType: string;
-  } | null;
-  messageCount: number;
+    primaryColor: string;
+  };
+  brandName?: string;
+  tags: string[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  rating?: number;
+  ratingFeedback?: string;
 }
 
-interface Pagination {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-}
-
-interface Filters {
-  search: string;
+interface VisitorFilters {
   status: string;
-  startDate: string;
-  endDate: string;
-  sortBy: string;
-  sortOrder: string;
+  search: string;
 }
 
 const HistoryPage: React.FC = () => {
   const router = useRouter();
   const { user } = useAuthStore();
-  const [chats, setChats] = useState<ChatHistory[]>([]);
-  const [pagination, setPagination] = useState<Pagination>({
-    total: 0,
-    page: 1,
-    limit: 20,
-    totalPages: 0
-  });
+  const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filters, setFilters] = useState<Filters>({
-    search: '',
+  const [filters, setFilters] = useState<VisitorFilters>({
     status: 'all',
-    startDate: '',
-    endDate: '',
-    sortBy: 'ended_at',
-    sortOrder: 'DESC'
+    search: ''
   });
 
-  // Modal states
-  const [selectedChat, setSelectedChat] = useState<ChatHistory | null>(null);
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  // Messages modal state
   const [showMessagesModal, setShowMessagesModal] = useState(false);
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [selectedVisitor, setSelectedVisitor] = useState<Visitor | null>(null);
+  const [messages, setMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
-  // Statistics
-  const [stats, setStats] = useState({
-    totalChats: 0,
-    avgRating: 0,
-    avgDuration: 0,
-    completedChats: 0
-  });
-
-  // Fetch chat history
-  const fetchChatHistory = useCallback(async (page = 1, showRefreshSpinner = false) => {
+  const fetchVisitors = useCallback(async () => {
     try {
-      if (showRefreshSpinner) {
+      if (refreshing) {
         setRefreshing(true);
       } else {
         setLoading(true);
       }
       
-      const params = {
-        page,
-        limit: pagination.limit,
-        ...filters
-      };
-      
-      const response = await apiClient.getChatHistory(params);
-      
-      console.log('Chat history response:', response);
+      const response = await apiClient.getVisitorHistory(filters);
       
       if (response.success) {
-        console.log('Setting chats:', response.data.chats);
-        setChats(response.data.chats || []);
-        setPagination(response.data.pagination || pagination);
+        const transformedVisitors = response.data.map((visitor: any) => ({
+          ...visitor,
+          name: visitor.name || 'Anonymous Visitor',
+          currentPage: visitor.current_page || visitor.currentPage || 'Unknown page',
+          lastActivity: visitor.last_activity || visitor.lastActivity,
+          sessionDuration: visitor.session_duration ? visitor.session_duration.toString() : visitor.sessionDuration || '0',
+          messagesCount: visitor.messages_count || visitor.messagesCount || 0,
+          visitsCount: visitor.visits_count || visitor.visitsCount || 1,
+          location: visitor.location || { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+          device: visitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
+          createdAt: visitor.created_at || visitor.createdAt,
+          referrer: visitor.referrer || 'Direct',
+          brandName: visitor.brandName || visitor.brand?.name || 'No Brand'
+        }));
         
-        // Calculate statistics
-        if (response.data.chats) {
-          const total = response.data.pagination.total;
-          const completed = response.data.chats.filter(c => c.status === 'completed').length;
-          const ratings = response.data.chats.filter(c => c.rating !== null).map(c => c.rating!);
-          const durations = response.data.chats.filter(c => c.duration !== null).map(c => c.duration!);
-          
-          setStats({
-            totalChats: total,
-            avgRating: ratings.length > 0 ? ratings.reduce((a, b) => a + b, 0) / ratings.length : 0,
-            avgDuration: durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : 0,
-            completedChats: completed
-          });
-        }
+        setVisitors(transformedVisitors);
       } else {
-        toast.error(response.message || 'Failed to fetch chat history');
+        toast.error(response.message || 'Failed to fetch visitor history');
       }
     } catch (error: any) {
-      console.error('Error fetching chat history:', error);
-      toast.error(error.message || 'Failed to fetch chat history');
+      console.error('Error fetching visitor history:', error);
+      toast.error(error.message || 'Failed to fetch visitor history');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [filters, pagination.limit]);
+  }, [filters, refreshing]);
 
   useEffect(() => {
-    fetchChatHistory();
-  }, [fetchChatHistory]);
-
-  const handleFilterChange = (key: keyof Filters, value: string) => {
-    setFilters(prev => ({
-      ...prev,
-      [key]: value
-    }));
-    setPagination(prev => ({ ...prev, page: 1 }));
-  };
-
-  const handlePageChange = (newPage: number) => {
-    setPagination(prev => ({ ...prev, page: newPage }));
-    fetchChatHistory(newPage);
-  };
+    fetchVisitors();
+  }, [fetchVisitors]);
 
   const handleRefresh = () => {
-    fetchChatHistory(pagination.page, true);
+    fetchVisitors();
   };
 
-  const formatDuration = (minutes: number | null) => {
-    if (!minutes) return 'N/A';
-    if (minutes < 60) return `${minutes}m`;
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    return `${hours}h ${remainingMinutes}m`;
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const getStatusBadge = (status: string) => {
-    const config = {
-      closed: { label: 'Closed', className: 'bg-gray-100 text-gray-800 hover:bg-gray-200' },
-      completed: { label: 'Completed', className: 'bg-green-100 text-green-800 hover:bg-green-200' },
-      visitor_left: { label: 'Visitor Left', className: 'bg-amber-100 text-amber-800 hover:bg-amber-200' }
-    };
-    
-    const statusConfig = config[status as keyof typeof config] || config.closed;
-    return <Badge className={statusConfig.className}>{statusConfig.label}</Badge>;
-  };
-
-  const renderStars = (rating: number | null) => {
-    if (!rating) return <span className="text-gray-400">No rating</span>;
-    
-    return (
-      <div className="flex items-center space-x-1">
-        {[1, 2, 3, 4, 5].map((star) => (
-          <Star
-            key={star}
-            className={`w-4 h-4 ${
-              star <= rating ? 'text-yellow-400 fill-current' : 'text-gray-300'
-            }`}
-          />
-        ))}
-        <span className="text-sm text-gray-600 ml-1">({rating.toFixed(1)})</span>
-      </div>
-    );
-  };
-
-  const handleExportChat = (chat: ChatHistory) => {
+  const handleViewMessages = async (visitor: Visitor) => {
     try {
-      const csvContent = [
-        ['Field', 'Value'],
-        ['Chat ID', chat.id.toString()],
-        ['Customer', chat.customer?.name || 'N/A'],
-        ['Customer Email', chat.customer?.email || 'N/A'],
-        ['Agent', chat.agent?.name || 'N/A'],
-        ['Status', chat.status],
-        ['Duration', formatDuration(chat.duration)],
-        ['Rating', chat.rating?.toString() || 'N/A'],
-        ['Start Date', formatDate(chat.startedAt)],
-        ['End Date', formatDate(chat.endedAt)],
-        ['Last Message', chat.lastMessage?.message || 'N/A']
-      ].map(row => row.join(',')).join('\n');
-
-      const blob = new Blob([csvContent], { type: 'text/csv' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `chat-${chat.id}-export.csv`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-
-      toast.success('Chat exported successfully');
-    } catch (error) {
-      console.error('Export error:', error);
-      toast.error('Failed to export chat');
-    }
-  };
-
-  const handleViewMessages = async (chat: ChatHistory) => {
-    try {
-      setSelectedChat(chat);
-      setLoadingMessages(true);
+      setSelectedVisitor(visitor);
       setShowMessagesModal(true);
-
-      const response = await apiClient.getChat(chat.id);
+      setLoadingMessages(true);
+      
+      const response = await apiClient.getVisitorMessages(visitor.id, { limit: 100 });
+      
       if (response.success && response.data.messages) {
-        setChatMessages(response.data.messages);
+        setMessages(response.data.messages.reverse()); // Reverse to show oldest first
       } else {
-        toast.error('Failed to load chat messages');
-        setChatMessages([]);
+        toast.error('Failed to load messages');
+        setMessages([]);
       }
     } catch (error) {
       console.error('Error loading messages:', error);
-      toast.error('Failed to load chat messages');
-      setChatMessages([]);
+      toast.error('Failed to load messages');
+      setMessages([]);
     } finally {
       setLoadingMessages(false);
     }
   };
 
-  const handleContactCustomer = (chat: ChatHistory) => {
-    if (chat.customer?.email) {
-      const subject = `Follow-up on Chat #${chat.id}`;
-      const body = `Hello ${chat.customer.name},\n\nI hope you're doing well. I wanted to follow up on our previous conversation (Chat #${chat.id}).\n\nBest regards,\n${user?.name}`;
-      const mailtoUrl = `mailto:${chat.customer.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      window.open(mailtoUrl);
-      toast.success('Email client opened');
-    } else {
-      toast.error('Customer email not available');
+  const formatDuration = (visitor: Visitor) => {
+    const duration = parseInt(visitor.sessionDuration);
+    if (!duration || duration === 0) return '0m';
+    if (duration < 60) return `${duration}m`;
+    const hours = Math.floor(duration / 60);
+    const minutes = duration % 60;
+    return `${hours}h ${minutes}m`;
+  };
+
+  const getPageTitle = (url: string) => {
+    if (!url || url === 'Unknown page') return 'Unknown page';
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+      const segments = pathname.split('/').filter(Boolean);
+      if (segments.length > 0) {
+        return segments[segments.length - 1].replace(/[-_]/g, ' ').split('.').shift() || 'Page';
+      }
+      return 'Home';
+    } catch {
+      const segments = url.split('/').filter(Boolean);
+      if (segments.length > 0) {
+        return segments[segments.length - 1].replace(/[-_]/g, ' ').split('.').shift() || 'Page';
+      }
+      return 'Page';
     }
   };
 
-  const handleViewDetails = (chat: ChatHistory) => {
-    setSelectedChat(chat);
-    setShowDetailsModal(true);
+  const getStatusBadge = (status: string) => {
+    const config = {
+      left: { label: 'Left', className: 'bg-gray-100 text-gray-800' },
+      complete: { label: 'Complete', className: 'bg-green-100 text-green-800' },
+      'end_chat': { label: 'End Chat', className: 'bg-blue-100 text-blue-800' },
+      offline: { label: 'Offline', className: 'bg-slate-100 text-slate-800' }
+    };
+    
+    const statusConfig = config[status as keyof typeof config] || { label: status, className: 'bg-gray-100 text-gray-800' };
+    return <Badge className={statusConfig.className}>{statusConfig.label}</Badge>;
   };
 
-  if (loading && chats.length === 0) {
-    return <LoadingSpinner text="Loading chat history..." />;
+  // Visitor categorization
+  const getHistoryVisitors = () => {
+    return visitors.filter(visitor => {
+      // Show only visitors who are offline or have completed
+      return visitor.status === 'offline' || visitor.status === 'idle';
+    });
+  };
+
+  const renderHistorySection = (title: string, icon: string, iconColor: string, visitors: Visitor[]) => {
+    const [isExpanded, setIsExpanded] = useState(true);
+    
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div 
+          className="bg-gray-50 px-4 py-2 cursor-pointer hover:bg-gray-100 transition-colors"
+          onClick={() => setIsExpanded(!isExpanded)}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <span className="text-lg">{icon}</span>
+              <h3 className="text-sm font-medium text-gray-900">{title}</h3>
+              <ChevronUp className={`w-4 h-4 text-gray-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+            </div>
+            <span className="text-sm text-gray-500">Visitors: {visitors.length}</span>
+          </div>
+        </div>
+
+        {isExpanded && (
+          <div className="border-t border-gray-200">
+            {visitors.length === 0 ? (
+              <div className="p-6 text-center text-gray-500">
+                <p className="text-sm">No visitors in this category</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Visitor</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Online</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Brand</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Viewing</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Referrer</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Visits</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Messages</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Activity</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {visitors.map((visitor, index) => (
+                      <tr
+                        key={`${visitor.id}-${index}`}
+                        className="hover:bg-gray-50"
+                      >
+                        {/* Visitor Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center space-x-3">
+                            <Avatar className="h-10 w-10">
+                              <AvatarImage src={visitor.avatar} />
+                              <AvatarFallback className="bg-blue-100 text-blue-700">
+                                {visitor.name?.charAt(0) || 'V'}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <div className="text-sm font-medium text-gray-900">
+                                {visitor.name && visitor.name.trim() && visitor.name !== 'Anonymous Visitor' 
+                                  ? visitor.name 
+                                  : `#${visitor.id.slice(-8)}`}
+                              </div>
+                              {visitor.name && visitor.name.trim() && visitor.name !== 'Anonymous Visitor' && (
+                                <div className="text-sm text-gray-500">#{visitor.id.slice(-8)}</div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Online Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center space-x-2">
+                            <div className={`w-2 h-2 rounded-full ${
+                              visitor.status === 'offline' ? 'bg-gray-400' : 'bg-green-500'
+                            }`}></div>
+                            <span className="text-sm text-gray-900">{formatDuration(visitor)}</span>
+                          </div>
+                        </td>
+
+                        {/* Brand Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm text-gray-900">
+                            {visitor.brandName || visitor.brand?.name || 'No Brand'}
+                          </span>
+                        </td>
+
+                        {/* Viewing Column */}
+                        <td className="px-4 py-3">
+                          <div className="text-sm text-gray-900">
+                            {visitor.currentPage && visitor.currentPage !== 'Unknown page' ? (
+                              <span className="truncate block" title={visitor.currentPage}>
+                                {getPageTitle(visitor.currentPage)}
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">Unknown page</span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Referrer Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center space-x-2">
+                            <Search className="w-4 h-4 text-gray-400" />
+                            <span className="text-sm text-gray-500">
+                              {visitor.referrer === 'Direct' || !visitor.referrer ? '-' : visitor.referrer}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Visits Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm text-gray-900">
+                            {visitor.visitsCount || 1}
+                          </span>
+                        </td>
+
+                        {/* Messages Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm text-gray-900">
+                            {visitor.messagesCount > 0 ? visitor.messagesCount : '-'}
+                          </span>
+                        </td>
+
+                        {/* Last Activity Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm text-gray-500">
+                            {new Date(visitor.lastActivity).toLocaleString()}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (loading) {
+    return <LoadingSpinner text="Loading visitor history..." />;
   }
 
   return (
@@ -322,503 +364,286 @@ const HistoryPage: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Chat History</h1>
+          <h1 className="text-3xl font-bold text-gray-900">Visitor History</h1>
           <p className="text-gray-600 mt-1">
-            Review completed chats and visitor interactions
+            View historical visitors and their interaction history
           </p>
         </div>
-        <div className="flex items-center space-x-2">
-          <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
-            <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-        </div>
-      </div>
-
-      {/* Statistics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <Card className="hover:shadow-md transition-shadow">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-gray-600">Total Chats</CardTitle>
-              <MessageCircle className="h-4 w-4 text-blue-600" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-gray-900">{stats.totalChats}</div>
-            <p className="text-xs text-gray-500 mt-1">All completed chats</p>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:shadow-md transition-shadow">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-gray-600">Completed</CardTitle>
-              <TrendingUp className="h-4 w-4 text-green-600" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-gray-900">{stats.completedChats}</div>
-            <p className="text-xs text-gray-500 mt-1">Successfully closed</p>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:shadow-md transition-shadow">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-gray-600">Avg Rating</CardTitle>
-              <Star className="h-4 w-4 text-yellow-600" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-gray-900">{stats.avgRating.toFixed(1)}</div>
-            <p className="text-xs text-gray-500 mt-1">Out of 5.0 stars</p>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:shadow-md transition-shadow">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-gray-600">Avg Duration</CardTitle>
-              <Clock className="h-4 w-4 text-purple-600" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-gray-900">{formatDuration(stats.avgDuration)}</div>
-            <p className="text-xs text-gray-500 mt-1">Per chat session</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filters */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-lg">Filters & Search</CardTitle>
-              <CardDescription>Find and filter your chat history</CardDescription>
-            </div>
-            {filters.search || filters.status !== 'all' || filters.startDate || filters.endDate ? (
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => {
-                  setFilters({
-                    search: '',
-                    status: 'all',
-                    startDate: '',
-                    endDate: '',
-                    sortBy: 'ended_at',
-                    sortOrder: 'DESC'
-                  });
-                }}
-              >
-                <X className="w-4 h-4 mr-2" />
-                Clear
-              </Button>
-            ) : null}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-            {/* Search */}
+        <div className="flex items-center space-x-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
               <Input
-                placeholder="Search by customer name or email"
+              placeholder="Search visitors"
                 value={filters.search}
-                onChange={(e) => handleFilterChange('search', e.target.value)}
-                className="pl-10"
+              onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+              className="pl-10 w-64"
               />
             </div>
-
-            {/* Status Filter */}
-            <Select value={filters.status} onValueChange={(value) => handleFilterChange('status', value)}>
-              <SelectTrigger>
+          <Select value={filters.status} onValueChange={(value) => setFilters(prev => ({ ...prev, status: value }))}>
+            <SelectTrigger className="w-40">
                 <SelectValue placeholder="All Status" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
+              <SelectItem value="offline">Offline</SelectItem>
                 <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="visitor_left">Visitor Left</SelectItem>
               </SelectContent>
             </Select>
-
-            {/* Start Date */}
-            <Input
-              type="date"
-              placeholder="Start Date"
-              value={filters.startDate}
-              onChange={(e) => handleFilterChange('startDate', e.target.value)}
-            />
-
-            {/* End Date */}
-            <Input
-              type="date"
-              placeholder="End Date"
-              value={filters.endDate}
-              onChange={(e) => handleFilterChange('endDate', e.target.value)}
-            />
-          </div>
-
-          <div className="flex items-center space-x-4">
-            {/* Sort By */}
-            <div className="flex items-center space-x-2">
-              <label className="text-sm font-medium text-gray-700">Sort by:</label>
-              <Select value={filters.sortBy} onValueChange={(value) => handleFilterChange('sortBy', value)}>
-                <SelectTrigger className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ended_at">End Date</SelectItem>
-                  <SelectItem value="started_at">Start Date</SelectItem>
-                  <SelectItem value="rating">Rating</SelectItem>
-                  <SelectItem value="duration">Duration</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Sort Order */}
-            <Select value={filters.sortOrder} onValueChange={(value) => handleFilterChange('sortOrder', value)}>
-              <SelectTrigger className="w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="DESC">Newest First</SelectItem>
-                <SelectItem value="ASC">Oldest First</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Results Summary */}
-      <div className="flex items-center justify-between bg-gray-50 px-4 py-3 rounded-lg">
-        <p className="text-sm text-gray-600 font-medium">
-          Showing <span className="text-gray-900">{chats.length}</span> of <span className="text-gray-900">{pagination.total}</span> chats
-        </p>
-        <div className="text-sm text-gray-600 font-medium">
-          Page {pagination.page} of {pagination.totalPages || 1}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="flex items-center space-x-2"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </Button>
         </div>
       </div>
 
-      {/* Chat History List */}
+      {/* History Section */}
       <div className="space-y-4">
-        {chats.length === 0 ? (
+        {getHistoryVisitors().length === 0 ? (
           <Card>
             <CardContent className="text-center py-12">
-              <MessageCircle className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">No chat history found</h3>
+              <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">No visitor history found</h3>
               <p className="text-gray-600 max-w-md mx-auto">
-                {filters.search || filters.status !== 'all' || filters.startDate || filters.endDate
-                  ? 'Try adjusting your filters to see more results.'
-                  : 'Completed chats will appear here once agents finish conversations.'}
+                Visitors who complete chats or go offline will appear here.
               </p>
             </CardContent>
           </Card>
         ) : (
-          chats.map((chat) => (
-            <Card key={chat.id} className="hover:shadow-lg transition-all duration-200 border-l-4 border-l-blue-500">
-              <CardContent className="p-6">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start space-x-4 flex-1">
-                    {/* Customer Avatar */}
-                    <Avatar className="w-14 h-14 border-2 border-gray-200">
-                      <AvatarImage src={chat.customer?.avatar} />
-                      <AvatarFallback className="bg-blue-100 text-blue-700 font-semibold">
-                        {chat.customer?.name?.charAt(0) || 'C'}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Clock className="w-5 h-5" />
+                <span>Historical Visitors</span>
+              </CardTitle>
+              <CardDescription>
+                Visitors with status: Left, Complete, End Chat, or Offline
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Visitor</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Brand</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Viewing</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Referrer</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Messages</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Activity</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {getHistoryVisitors().map((visitor, index) => (
+                      <tr key={`${visitor.id}-${index}`} className="hover:bg-gray-50">
+                        {/* Visitor Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center space-x-3">
+                            <Avatar className="h-10 w-10">
+                              <AvatarImage src={visitor.avatar} />
+                              <AvatarFallback className="bg-blue-100 text-blue-700">
+                                {visitor.name?.charAt(0) || 'V'}
                       </AvatarFallback>
                     </Avatar>
-
-                    {/* Chat Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center space-x-3 mb-3">
-                        <h3 className="text-lg font-semibold text-gray-900 truncate">
-                          {chat.customer?.name || 'Anonymous Customer'}
-                        </h3>
-                        {getStatusBadge(chat.status)}
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                        {/* Details Row 1 */}
-                        <div className="space-y-2">
-                          <div className="flex items-center space-x-2 text-gray-600">
-                            <User className="w-4 h-4 flex-shrink-0" />
-                            <span className="truncate">{chat.customer?.email || 'No email'}</span>
-                          </div>
-                          <div className="flex items-center space-x-2 text-gray-600">
-                            <Clock className="w-4 h-4 flex-shrink-0" />
-                            <span>{formatDuration(chat.duration)}</span>
+                            <div>
+                              <div className="text-sm font-medium text-gray-900">
+                                {visitor.name && visitor.name.trim() && visitor.name !== 'Anonymous Visitor' 
+                                  ? visitor.name 
+                                  : `#${visitor.id.slice(-8)}`}
+                              </div>
+                              {visitor.name && visitor.name.trim() && visitor.name !== 'Anonymous Visitor' && (
+                                <div className="text-sm text-gray-500">#{visitor.id.slice(-8)}</div>
+                              )}
                           </div>
                         </div>
+                        </td>
 
-                        {/* Details Row 2 */}
-                        <div className="space-y-2">
-                          <div className="flex items-center space-x-2 text-gray-600">
-                            <Calendar className="w-4 h-4 flex-shrink-0" />
-                            <span>{formatDate(chat.endedAt)}</span>
-                          </div>
-                          <div className="flex items-center space-x-2 text-gray-600">
-                            <MessageCircle className="w-4 h-4 flex-shrink-0" />
-                            <span>{chat.messageCount} message{chat.messageCount !== 1 ? 's' : ''}</span>
-                          </div>
+                        {/* Status Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {(() => {
+                            // Map visitor status to history status badges
+                            if (visitor.status === 'offline') {
+                              // Check if visitor had an assigned agent (completed chat)
+                              if (visitor.assignedAgent) {
+                                return <Badge className="bg-green-100 text-green-800">Complete</Badge>;
+                              } else {
+                                return <Badge className="bg-slate-100 text-slate-800">Offline</Badge>;
+                              }
+                            } else if (visitor.status === 'idle') {
+                              return <Badge className="bg-blue-100 text-blue-800">End Chat</Badge>;
+                            } else {
+                              return <Badge className="bg-gray-100 text-gray-800">Left</Badge>;
+                            }
+                          })()}
+                        </td>
+
+                        {/* Brand Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm text-gray-900">
+                            {visitor.brandName || visitor.brand?.name || 'No Brand'}
+                          </span>
+                        </td>
+
+                        {/* Viewing Column */}
+                        <td className="px-4 py-3">
+                          <div className="text-sm text-gray-900">
+                            {visitor.currentPage && visitor.currentPage !== 'Unknown page' ? (
+                              <span className="truncate block" title={visitor.currentPage}>
+                                {getPageTitle(visitor.currentPage)}
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">Unknown page</span>
+                            )}
                         </div>
+                        </td>
 
-                        {/* Rating */}
-                        <div className="flex items-start space-x-2 text-gray-600">
-                          {renderStars(chat.rating)}
-                        </div>
-                      </div>
-
-                      {/* Last Message */}
-                      {chat.lastMessage && (
-                        <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                          <div className="flex items-center space-x-2 mb-1">
-                            <MessageCircle className="w-4 h-4 text-gray-500" />
-                            <span className="text-sm font-medium text-gray-700">Last Message</span>
-                            <span className="text-xs text-gray-500">
-                              ({formatDate(chat.lastMessage.createdAt)})
+                        {/* Referrer Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center space-x-2">
+                            <Search className="w-4 h-4 text-gray-400" />
+                            <span className="text-sm text-gray-500">
+                              {visitor.referrer === 'Direct' || !visitor.referrer ? '-' : visitor.referrer}
                             </span>
                           </div>
-                          <p className="text-sm text-gray-600 line-clamp-2">
-                            {chat.lastMessage.message}
-                          </p>
-                        </div>
-                      )}
+                        </td>
 
-                      {/* Rating Feedback */}
-                      {chat.ratingFeedback && (
-                        <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
-                          <div className="flex items-center space-x-2 mb-1">
-                            <Star className="w-4 h-4 text-blue-600" />
-                            <span className="text-sm font-medium text-blue-900">Customer Feedback</span>
+                        {/* Duration Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center space-x-2">
+                            <Clock className="w-4 h-4 text-gray-400" />
+                            <span className="text-sm text-gray-900">{formatDuration(visitor)}</span>
+                        </div>
+                        </td>
+
+                        {/* Messages Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm text-gray-900">
+                            {visitor.messagesCount > 0 ? visitor.messagesCount : '-'}
+                          </span>
+                        </td>
+
+                        {/* Last Activity Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center space-x-2">
+                            <Calendar className="w-4 h-4 text-gray-400" />
+                            <span className="text-sm text-gray-500">
+                              {new Date(visitor.lastActivity).toLocaleDateString()}
+                            </span>
                           </div>
-                          <p className="text-sm text-blue-800">{chat.ratingFeedback}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                        </td>
 
-                  {/* Actions */}
-                  <div className="flex flex-col items-end space-y-2">
-                    <Button 
-                      variant="outline" 
-                      size="sm"
-                      onClick={() => handleViewDetails(chat)}
-                      className="w-full"
-                    >
-                      <Eye className="w-4 h-4 mr-2" />
-                      Details
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="w-full">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleExportChat(chat)}>
-                          <Download className="w-4 h-4 mr-2" />
-                          Export Chat
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleViewMessages(chat)}>
-                          <MessageCircle className="w-4 h-4 mr-2" />
-                          View Messages
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleContactCustomer(chat)}>
-                          <Mail className="w-4 h-4 mr-2" />
-                          Contact Customer
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
+                        {/* Actions Column */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleViewMessages(visitor)}
+                          >
+                            <MessageCircle className="w-4 h-4 mr-2" />
+                            Messages
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
                 </div>
               </CardContent>
             </Card>
-          ))
-        )}
-      </div>
-
-      {/* Pagination */}
-      {pagination.totalPages > 1 && (
-        <div className="flex items-center justify-center space-x-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handlePageChange(pagination.page - 1)}
-            disabled={pagination.page === 1}
-          >
-            <ChevronLeft className="w-4 h-4 mr-1" />
-            Previous
-          </Button>
-          
-          <div className="flex items-center space-x-1">
-            {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
-              const pageNum = i + 1;
-              return (
-                <Button
-                  key={pageNum}
-                  variant={pagination.page === pageNum ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => handlePageChange(pageNum)}
-                  className="w-10 h-10 p-0"
-                >
-                  {pageNum}
-                </Button>
-              );
-            })}
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handlePageChange(pagination.page + 1)}
-            disabled={pagination.page === pagination.totalPages}
-          >
-            Next
-            <ChevronRight className="w-4 h-4 ml-1" />
-          </Button>
-        </div>
-      )}
-
-      {/* Chat Details Modal */}
-      <Dialog open={showDetailsModal} onOpenChange={setShowDetailsModal}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center space-x-2">
-              <FileText className="w-5 h-5" />
-              <span>Chat Details - #{selectedChat?.id}</span>
-            </DialogTitle>
-            <DialogDescription>Complete information about this chat session</DialogDescription>
-          </DialogHeader>
-          {selectedChat && (
-            <Tabs defaultValue="overview" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
-                <TabsTrigger value="details">Details</TabsTrigger>
-              </TabsList>
-              <TabsContent value="overview" className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Customer</label>
-                    <div className="flex items-center space-x-2 mt-1">
-                      <Avatar className="h-10 w-10">
-                        <AvatarImage src={selectedChat.customer?.avatar} />
-                        <AvatarFallback>{selectedChat.customer?.name?.charAt(0) || 'C'}</AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="font-medium">{selectedChat.customer?.name || 'Anonymous'}</p>
-                        <p className="text-sm text-gray-500">{selectedChat.customer?.email}</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Agent</label>
-                    <div className="flex items-center space-x-2 mt-1">
-                      <Avatar className="h-10 w-10">
-                        <AvatarImage src={selectedChat.agent?.avatar} />
-                        <AvatarFallback>{selectedChat.agent?.name?.charAt(0) || 'A'}</AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="font-medium">{selectedChat.agent?.name || 'Unassigned'}</p>
-                        <p className="text-sm text-gray-500">{selectedChat.agent?.email}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Status</label>
-                    <div className="mt-1">{getStatusBadge(selectedChat.status)}</div>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Duration</label>
-                    <p className="mt-1">{formatDuration(selectedChat.duration)}</p>
-                  </div>
-                </div>
-
-                {selectedChat.rating !== null && (
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Rating & Feedback</label>
-                    <div className="mt-2 flex items-start space-x-2">
-                      <div>{renderStars(selectedChat.rating)}</div>
-                      {selectedChat.ratingFeedback && (
-                        <p className="text-sm text-gray-600 italic mt-1">{selectedChat.ratingFeedback}</p>
                       )}
                     </div>
-                  </div>
-                )}
-              </TabsContent>
-              <TabsContent value="details" className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Start Date</label>
-                    <p className="mt-1">{formatDate(selectedChat.startedAt)}</p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">End Date</label>
-                    <p className="mt-1">{formatDate(selectedChat.endedAt)}</p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Department</label>
-                    <p className="mt-1">{selectedChat.department?.name || 'N/A'}</p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Messages</label>
-                    <p className="mt-1">{selectedChat.messageCount} messages</p>
-                  </div>
-                </div>
-              </TabsContent>
-            </Tabs>
-          )}
-        </DialogContent>
-      </Dialog>
 
-      {/* Chat Messages Modal */}
+      {/* Messages Modal */}
       <Dialog open={showMessagesModal} onOpenChange={setShowMessagesModal}>
-        <DialogContent className="max-w-5xl max-h-[85vh]">
+        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle className="flex items-center space-x-2">
-              <MessageCircle className="w-5 h-5" />
-              <span>Chat Messages - #{selectedChat?.id}</span>
+            <DialogTitle className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <MessageCircle className="w-5 h-5" />
+                <span>Visitor Messages - {selectedVisitor?.name || 'Visitor #' + selectedVisitor?.id.slice(-8)}</span>
+              </div>
             </DialogTitle>
-            <DialogDescription>Full conversation history</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[60vh] overflow-y-auto p-4 space-y-3 bg-gray-50 rounded-lg">
-            {loadingMessages ? (
+          <DialogDescription>
+            Complete conversation history with visitor
+          </DialogDescription>
+        </DialogHeader>
+        
+        <div className="flex-1 overflow-y-auto p-4 bg-gray-50 rounded-lg border border-gray-200">
+          {/* Rating Display */}
+          {selectedVisitor?.rating && (
+            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <div className="flex items-center space-x-2 mb-2">
+                <span className="text-lg">⭐</span>
+                <h4 className="font-semibold text-yellow-900">Visitor Rating</h4>
+              </div>
+              <div className="flex items-center space-x-1 mb-2">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <span key={star} className={star <= selectedVisitor.rating! ? 'text-yellow-400' : 'text-gray-300'}>
+                    ★
+                  </span>
+                ))}
+                <span className="text-sm text-yellow-800 ml-2">({selectedVisitor.rating}/5)</span>
+              </div>
+              {selectedVisitor.ratingFeedback && (
+                <p className="text-sm text-yellow-800 italic mt-2">"{selectedVisitor.ratingFeedback}"</p>
+              )}
+            </div>
+          )}
+          
+          {loadingMessages ? (
               <LoadingSpinner text="Loading messages..." />
-            ) : chatMessages.length === 0 ? (
-              <EmptyState
-                icon={MessageCircle}
-                title="No messages found"
-                description="This chat has no messages"
-              />
+            ) : messages.length === 0 ? (
+              <div className="text-center py-12">
+                <MessageCircle className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">No messages found</h3>
+                <p className="text-gray-600">This visitor hasn't sent any messages yet.</p>
+              </div>
             ) : (
-              chatMessages.map((message, index) => (
-                <div
-                  key={message.id || index}
-                  className={`flex ${message.sender_type === 'agent' ? 'justify-end' : 'justify-start'}`}
-                >
+              <div className="space-y-4">
+                {messages.map((message, index) => (
                   <div
-                    className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                      message.sender_type === 'agent'
-                        ? 'bg-blue-600 text-white'
-                        : message.sender_type === 'system'
-                        ? 'bg-gray-200 text-gray-700 text-center mx-auto'
-                        : 'bg-white text-gray-800 border border-gray-200'
-                    }`}
+                    key={message.id || index}
+                    className={`flex ${message.sender === 'agent' ? 'justify-end' : 'justify-start'}`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{message.message}</p>
-                    <p className={`text-xs mt-1 ${
-                      message.sender_type === 'agent' ? 'text-blue-100' : 'text-gray-500'
-                    }`}>
-                      {formatDate(message.created_at)}
-                    </p>
+                    <div
+                      className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg ${
+                        message.sender === 'agent'
+                          ? 'bg-blue-600 text-white'
+                          : message.sender === 'system'
+                          ? 'bg-gray-200 text-gray-700 text-center mx-auto'
+                          : message.sender === 'ai'
+                          ? 'bg-green-100 text-green-900 border border-green-200'
+                          : 'bg-white text-gray-800 border border-gray-200'
+                      }`}
+                    >
+                      <div className="font-medium text-xs mb-1">
+                        {message.sender === 'agent' ? 'You' : 
+                         message.sender === 'ai' ? 'AI Assistant' :
+                         message.sender === 'system' ? 'System' :
+                         selectedVisitor?.name || 'Visitor'}
+                        {message.senderName && message.senderName !== 'Visitor' && ` (${message.senderName})`}
+                      </div>
+                      <p className="text-sm whitespace-pre-wrap">{message.content || message.message}</p>
+                      <p className={`text-xs mt-2 ${
+                        message.sender === 'agent' ? 'text-blue-100' : 
+                        message.sender === 'system' ? 'text-gray-600' :
+                        message.sender === 'ai' ? 'text-green-600' :
+                        'text-gray-500'
+                      }`}>
+                        {new Date(message.timestamp || message.created_at).toLocaleString()}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))
+                ))}
+              </div>
             )}
           </div>
         </DialogContent>

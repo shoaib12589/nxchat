@@ -50,17 +50,33 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const [isVisitorTyping, setIsVisitorTyping] = useState(false);
+  const [visitorTypingContent, setVisitorTypingContent] = useState<string>('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const { user: currentUser } = useAuthStore();
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const [availableAgents, setAvailableAgents] = useState<User[]>([]);
   const [transferring, setTransferring] = useState(false);
+
+  const scrollToBottom = () => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
 
   useEffect(() => {
     if (chatId) {
       fetchChat();
     }
   }, [chatId]);
+
+  // Auto-scroll when messages change
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   // Socket event handlers
   useEffect(() => {
@@ -69,17 +85,27 @@ export default function ChatPage() {
     // Join chat room when socket is connected
     socket.emit('join_chat', { chatId: parseInt(chatId) });
 
+
     // Listen for new messages
     const handleNewMessage = (data: any) => {
       console.log('New message received:', data);
       if (data.message) {
         setMessages(prev => [...prev, data.message]);
+        // Scroll to bottom to show the new message
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
       }
     };
 
     // Listen for visitor messages (for agent dashboard)
     const handleVisitorMessage = (data: any) => {
       console.log('Visitor message received:', data);
+      // Clear typing preview when actual message arrives
+      if (chat?.customer?.id && data.visitorId === chat.customer.id.toString()) {
+        setVisitorTypingContent('');
+      }
+      
       if (data.visitorId && data.message) {
         // Add visitor message to the chat
         const visitorMessage: Message = {
@@ -103,6 +129,10 @@ export default function ChatPage() {
           } as User
         };
         setMessages(prev => [...prev, visitorMessage]);
+        // Scroll to bottom to show the new message
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
       }
     };
 
@@ -131,19 +161,93 @@ export default function ChatPage() {
           } as User
         };
         setMessages(prev => [...prev, aiMessage]);
+        // Scroll to bottom to show the AI message
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
+      }
+    };
+
+    // Listen for typing indicators
+    const handleUserTyping = (data: any) => {
+      // Only show typing indicator if it's from the customer/visitor, not from the agent themselves
+      if (data.user && data.user.role === 'customer' && chat?.customer?.id === data.user.id) {
+        setIsVisitorTyping(data.isTyping);
+      }
+    };
+
+    // Listen for visitor typing (for visitor chat compatibility)
+    const handleVisitorTyping = (data: any) => {
+      if (data.visitorId && chat?.customer?.id === parseInt(data.visitorId)) {
+        setIsVisitorTyping(data.isTyping);
+        // Clear typing content when visitor stops typing
+        if (!data.isTyping) {
+          setVisitorTypingContent('');
+        }
+      }
+    };
+
+    // Listen for visitor typing content (live preview)
+    const handleVisitorTypingContent = (data: { visitorId: string; content: string; timestamp: string }) => {
+      console.log('Received visitor:typing-content:', data, 'Chat customer ID:', chat?.customer?.id);
+      
+      // Match by customer ID (could be string or number)
+      if (chat?.customer?.id) {
+        const customerIdStr = chat.customer.id.toString();
+        const visitorIdStr = data.visitorId.toString();
+        
+        // Match if IDs match (handle both string and number formats)
+        if (customerIdStr === visitorIdStr || customerIdStr === data.visitorId || chat.customer.id === parseInt(data.visitorId)) {
+          console.log('Matched visitor typing content, updating preview');
+          // Update the live typing preview
+          setVisitorTypingContent(data.content || '');
+          // Scroll to bottom to show the typing preview
+          setTimeout(() => {
+            scrollToBottom();
+          }, 100);
+        }
       }
     };
 
     socket.on('new_message', handleNewMessage);
     socket.on('visitor:message', handleVisitorMessage);
     socket.on('ai:response', handleAIResponse);
+    socket.on('user_typing', handleUserTyping);
+    socket.on('visitor:chat:typing', handleVisitorTyping);
+    socket.on('visitor:typing-content', handleVisitorTypingContent);
 
     return () => {
       socket.off('new_message', handleNewMessage);
       socket.off('visitor:message', handleVisitorMessage);
       socket.off('ai:response', handleAIResponse);
+      socket.off('user_typing', handleUserTyping);
+    socket.off('visitor:chat:typing', handleVisitorTyping);
+    socket.off('visitor:typing-content', handleVisitorTypingContent);
     };
-  }, [socket, isConnected, chatId]);
+  }, [socket, isConnected, chatId, chat]);
+
+  // Join visitor room when chat is loaded (separate effect to ensure chat data is available)
+  useEffect(() => {
+    if (!socket || !isConnected || !chat?.customer?.id) return;
+
+    const customerId = chat.customer.id.toString();
+    // Join visitor room to receive typing content events
+    const visitorRoomName = `visitor_${customerId}`;
+    socket.emit('join_visitor_room', { visitorId: customerId });
+    console.log('Joined visitor room for typing content:', visitorRoomName);
+
+    return () => {
+      // Leave visitor room when component unmounts or chat changes
+      if (chat?.customer?.id) {
+        socket.emit('leave_visitor_room', { visitorId: customerId });
+      }
+    };
+  }, [socket, isConnected, chat?.customer?.id]);
+  
+  // Clear typing content when chat changes
+  useEffect(() => {
+    setVisitorTypingContent('');
+  }, [chatId]);
 
   const fetchChat = async () => {
     try {
@@ -153,6 +257,10 @@ export default function ChatPage() {
       if (response.success) {
         setChat(response.data);
         setMessages(response.data.messages || []);
+        // Scroll to bottom after loading messages
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
       }
     } catch (error: any) {
       setError(error.message || 'Failed to fetch chat');
@@ -163,7 +271,7 @@ export default function ChatPage() {
 
   const fetchAvailableAgents = async () => {
     try {
-      const response = await apiClient.getAgents();
+      const response = await apiClient.getAgentsList();
       if (response.success) {
         // Filter out current agent
         const agents = response.data.filter((agent: User) => agent.id !== currentUser?.id);
@@ -236,6 +344,11 @@ export default function ChatPage() {
         setMessages(prev => [...prev, agentMessage]);
         setNewMessage('');
         
+        // Scroll to bottom to show the sent message
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
+        
         // Restore focus to textarea to ensure placeholder text behaves correctly
         setTimeout(() => {
           if (textareaRef.current) {
@@ -256,6 +369,48 @@ export default function ChatPage() {
       handleSendMessage();
     }
   };
+
+  // Handle typing indicator
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setNewMessage(value);
+
+    // Emit typing start/stop events
+    if (socket && isConnected && chat) {
+      // Clear existing timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Emit typing start if there's text
+      if (value.trim().length > 0) {
+        socket.emit('typing_start');
+      } else {
+        socket.emit('typing_stop');
+        return;
+      }
+
+      // Set timeout to stop typing after 2 seconds of inactivity
+      typingTimeoutRef.current = setTimeout(() => {
+        if (socket && isConnected) {
+          socket.emit('typing_stop');
+        }
+      }, 2000);
+    }
+  };
+
+  // Cleanup typing timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      // Stop typing when component unmounts
+      if (socket && isConnected) {
+        socket.emit('typing_stop');
+      }
+    };
+  }, [socket, isConnected]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -285,7 +440,8 @@ export default function ChatPage() {
     }
   };
 
-  const getPriorityBadge = (priority: string) => {
+  const getPriorityBadge = (priority?: string) => {
+    if (!priority) return null;
     switch (priority) {
       case 'urgent':
         return <Badge variant="destructive">Urgent</Badge>;
@@ -342,7 +498,7 @@ export default function ChatPage() {
                     {chat.customer?.name}
                   </h2>
                   {getStatusBadge(chat.status)}
-                  {getPriorityBadge(chat.priority)}
+                  {chat.priority && getPriorityBadge(chat.priority)}
                 </div>
                 <p className="text-sm text-muted-foreground">{chat.customer?.email}</p>
                 <p className="text-xs text-muted-foreground">
@@ -389,21 +545,64 @@ export default function ChatPage() {
                   No messages yet. Start the conversation!
                 </div>
               ) : (
-                messages.map((message, index) => (
-                  <motion.div
-                    key={message.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3, delay: index * 0.1 }}
-                  >
-                    <ChatBubble
-                      message={message}
-                      isOwn={message.sender?.role === 'agent'}
-                      showAvatar={true}
-                      showTimestamp={true}
-                    />
-                  </motion.div>
-                ))
+                <>
+                  {messages.map((message, index) => (
+                    <motion.div
+                      key={message.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3, delay: index * 0.1 }}
+                    >
+                      <ChatBubble
+                        message={message}
+                        isOwn={message.sender?.role === 'agent'}
+                        showAvatar={true}
+                        showTimestamp={true}
+                      />
+                    </motion.div>
+                  ))}
+                  {isVisitorTyping && !visitorTypingContent && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex items-center space-x-2 text-sm text-muted-foreground py-2"
+                    >
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                      </div>
+                      <span>{chat.customer?.name || 'Visitor'} is typing...</span>
+                    </motion.div>
+                  )}
+                  
+                  {/* Live Typing Preview */}
+                  {visitorTypingContent && visitorTypingContent.trim().length > 0 && (
+                    <motion.div
+                      key="typing-preview"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex justify-start animate-pulse"
+                    >
+                      <div className="max-w-[80%] bg-gray-100 border border-dashed border-gray-300 rounded-lg px-4 py-2 opacity-75">
+                        <div className="flex items-center space-x-2 mb-1">
+                          <div className="flex space-x-1">
+                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                          </div>
+                          <span className="text-xs text-gray-500 italic">typing...</span>
+                        </div>
+                        <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                          {visitorTypingContent}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                  
+                  {/* Scroll anchor for auto-scroll */}
+                  <div ref={messagesEndRef} />
+                </>
               )}
             </div>
           </ScrollArea>
@@ -415,7 +614,7 @@ export default function ChatPage() {
                 <Textarea
                   ref={textareaRef}
                   value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
+                  onChange={handleInputChange}
                   onKeyPress={handleKeyPress}
                   placeholder="Type your message..."
                   className="min-h-[60px] resize-none"

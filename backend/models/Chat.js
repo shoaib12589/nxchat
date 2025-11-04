@@ -40,7 +40,7 @@ const Chat = sequelize.define('Chat', {
     }
   },
   status: {
-    type: DataTypes.ENUM('waiting', 'active', 'closed', 'transferred'),
+    type: DataTypes.ENUM('waiting', 'active', 'closed', 'transferred', 'completed', 'visitor_left'),
     allowNull: false,
     defaultValue: 'waiting'
   },

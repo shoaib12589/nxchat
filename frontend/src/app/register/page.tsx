@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/authStore';
@@ -9,12 +9,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { MessageSquare, Eye, EyeOff, Loader2, Building2 } from 'lucide-react';
+import { MessageSquare, Eye, EyeOff, Loader2, Building2, Lock } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { apiClient } from '@/lib/api';
 
 export default function RegisterPage() {
   const router = useRouter();
   const { register, isLoading, error, clearError } = useAuthStore();
+  const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null);
+  const [checkingStatus, setCheckingStatus] = useState(true);
       const [formData, setFormData] = useState({
         email: '',
         password: '',
@@ -27,6 +30,32 @@ export default function RegisterPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<{[key: string]: string}>({});
+
+  // Check if registration is enabled
+  useEffect(() => {
+    const checkRegistrationStatus = async () => {
+      try {
+        setCheckingStatus(true);
+        const response = await apiClient.getRegistrationStatus();
+        setRegistrationEnabled(response.enabled);
+        
+        // If registration is disabled, redirect to login page after 3 seconds
+        if (!response.enabled) {
+          setTimeout(() => {
+            router.push('/login');
+          }, 3000);
+        }
+      } catch (error) {
+        console.error('Failed to check registration status:', error);
+        // On error, assume registration is enabled to allow access
+        setRegistrationEnabled(true);
+      } finally {
+        setCheckingStatus(false);
+      }
+    };
+
+    checkRegistrationStatus();
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,6 +131,68 @@ export default function RegisterPage() {
       const isFormValid = formData.email && formData.password && formData.first_name &&
                          formData.last_name && formData.company_name &&
                          isPasswordMatch && Object.keys(validationErrors).length === 0;
+
+  // Show loading state while checking registration status
+  if (checkingStatus) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 p-4">
+        <Card className="shadow-xl w-full max-w-md">
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center justify-center space-y-4 py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">Checking registration status...</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Show disabled message if registration is not enabled
+  if (registrationEnabled === false) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 p-4">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="w-full max-w-md"
+        >
+          <Card className="shadow-xl">
+            <CardHeader className="text-center">
+              <div className="flex justify-center mb-4">
+                <div className="w-12 h-12 bg-red-100 dark:bg-red-900/20 rounded-xl flex items-center justify-center">
+                  <Lock className="w-7 h-7 text-red-600 dark:text-red-400" />
+                </div>
+              </div>
+              <CardTitle className="text-2xl font-bold">Registration Disabled</CardTitle>
+              <CardDescription>
+                New user registration is currently disabled
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Alert variant="destructive" className="mb-6">
+                <AlertDescription>
+                  User registration has been disabled by the administrator. Please contact support if you need access to the platform.
+                </AlertDescription>
+              </Alert>
+              <div className="text-center space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Redirecting to login page in a few seconds...
+                </p>
+                <Button
+                  onClick={() => router.push('/login')}
+                  className="w-full"
+                >
+                  Go to Login Page
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 p-4">

@@ -1,4 +1,4 @@
-const { Brand, BrandAgent, User, WidgetKey, Visitor } = require('../models');
+const { Brand, BrandAgent, User, WidgetKey, Visitor, Company, Plan } = require('../models');
 const { Op } = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 
@@ -123,6 +123,31 @@ const createBrand = async (req, res) => {
     } = req.body;
 
     const tenantId = req.user.tenant_id;
+
+    // Get company plan to check limits
+    const company = await Company.findOne({
+      where: { id: tenantId },
+      include: [{ model: Plan, as: 'plan' }]
+    });
+
+    if (!company || !company.plan) {
+      return res.status(404).json({ success: false, message: 'Company or plan not found' });
+    }
+
+    // Check brand limit (ensure max_brands has a valid value)
+    const maxBrands = company.plan.max_brands ?? 1; // Default to 1 if null/undefined
+    const currentBrandsCount = await Brand.count({ where: { tenant_id: tenantId } });
+    
+    if (currentBrandsCount >= maxBrands) {
+      return res.status(403).json({
+        success: false,
+        message: `You have reached your brand limit of ${maxBrands}. Please upgrade your plan to create more brands.`,
+        limit_reached: true,
+        limit_type: 'brands',
+        current: currentBrandsCount,
+        limit: maxBrands
+      });
+    }
 
     // Check if brand name already exists for this company
     const existingBrand = await Brand.findOne({
@@ -378,7 +403,15 @@ const getAvailableAgents = async (req, res) => {
         role: 'agent',
         status: 'active'
       },
-      attributes: ['id', 'name', 'email', 'avatar'],
+      attributes: ['id', 'name', 'email', 'avatar', 'role', 'status', 'agent_presence_status', 'department_id'],
+      include: [
+        {
+          model: require('../models').Department,
+          as: 'department',
+          attributes: ['id', 'name'],
+          required: false
+        }
+      ],
       order: [['name', 'ASC']]
     });
 

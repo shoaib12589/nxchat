@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const { Op } = require('sequelize');
+const multer = require('multer');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 const { authenticateToken, requireSuperAdmin } = require('../../middleware/auth');
 const { requireTenant } = require('../../middleware/tenantAuth');
 const { Company, User, Plan, Chat, Message, CallSession, Ticket, Visitor } = require('../../models');
+const { uploadFile } = require('../../services/storageService');
 
 // Dashboard analytics
 router.get('/dashboard', authenticateToken, requireSuperAdmin, async (req, res) => {
@@ -389,6 +393,7 @@ router.put('/settings', authenticateToken, requireSuperAdmin, async (req, res) =
       smtp_user: { category: 'email', description: 'SMTP username' },
       smtp_password: { category: 'email', description: 'SMTP password', is_encrypted: true },
       smtp_secure: { category: 'email', description: 'Use secure SMTP connection' },
+      smtp_from_name: { category: 'email', description: 'From name displayed in sent emails' },
       
       // System Settings
       maintenance_mode: { category: 'system', description: 'Whether maintenance mode is enabled' },
@@ -398,9 +403,16 @@ router.put('/settings', authenticateToken, requireSuperAdmin, async (req, res) =
       allowed_file_types: { category: 'system', description: 'Comma-separated list of allowed file types' },
       
       // Storage Settings
-      storage_provider: { category: 'storage', description: 'Default storage provider' },
+      default_storage_provider: { category: 'storage', description: 'Default storage provider (r2, wasabi, s3)' },
+      storage_provider: { category: 'storage', description: 'Default storage provider (deprecated, use default_storage_provider)' },
       storage_bucket: { category: 'storage', description: 'Default storage bucket' },
       storage_region: { category: 'storage', description: 'Default storage region' },
+      r2_public_url: { category: 'storage', description: 'Cloudflare R2 public URL for file access (e.g., https://pub-xxx.r2.dev)' },
+      r2_access_key_id: { category: 'storage', description: 'Cloudflare R2 Access Key ID', is_encrypted: true },
+      r2_secret_access_key: { category: 'storage', description: 'Cloudflare R2 Secret Access Key', is_encrypted: true },
+      r2_bucket_name: { category: 'storage', description: 'Cloudflare R2 Bucket Name' },
+      r2_endpoint: { category: 'storage', description: 'Cloudflare R2 Endpoint URL (e.g., https://xxx.r2.cloudflarestorage.com)' },
+      r2_region: { category: 'storage', description: 'Cloudflare R2 Region (usually "auto")' },
       
       // AI Settings
       openai_api_key: { category: 'ai', description: 'OpenAI API key', is_encrypted: true },
@@ -409,6 +421,8 @@ router.put('/settings', authenticateToken, requireSuperAdmin, async (req, res) =
       ai_max_tokens: { category: 'ai', description: 'Maximum tokens for AI responses' },
       ai_agent_name: { category: 'ai', description: 'Name displayed for the AI agent in conversations' },
       ai_agent_logo: { category: 'ai', description: 'URL of the logo image for the AI agent' },
+      app_logo: { category: 'general', description: 'Application logo URL' },
+      app_favicon: { category: 'general', description: 'Application favicon URL' },
       ai_system_message: { category: 'ai', description: 'System message that defines AI behavior and personality' },
       
       // Payment Settings
@@ -421,7 +435,16 @@ router.put('/settings', authenticateToken, requireSuperAdmin, async (req, res) =
       enable_video_calls: { category: 'features', description: 'Enable video calling feature' },
       enable_file_sharing: { category: 'features', description: 'Enable file sharing feature' },
       enable_analytics: { category: 'features', description: 'Enable analytics feature' },
-      enable_webhooks: { category: 'features', description: 'Enable webhooks feature' }
+      enable_webhooks: { category: 'features', description: 'Enable webhooks feature' },
+      
+      // Redis Settings
+      redis_enabled: { category: 'redis', description: 'Enable Redis for caching and session management' },
+      redis_host: { category: 'redis', description: 'Redis server host' },
+      redis_port: { category: 'redis', description: 'Redis server port' },
+      redis_password: { category: 'redis', description: 'Redis password', is_encrypted: true },
+      redis_db: { category: 'redis', description: 'Redis database number' },
+      redis_url: { category: 'redis', description: 'Redis connection URL (for Redis Cloud)', is_encrypted: false },
+      redis_cloud_provider: { category: 'redis', description: 'Redis cloud provider name' }
     };
 
     for (const [key, value] of Object.entries(settings)) {
@@ -441,6 +464,22 @@ router.put('/settings', authenticateToken, requireSuperAdmin, async (req, res) =
       });
     }
 
+    // Reload Redis configuration if Redis settings were updated
+    const redisSettingsUpdated = Object.keys(settings).some(key => 
+      key.startsWith('redis_')
+    );
+    
+    if (redisSettingsUpdated) {
+      try {
+        const { reloadRedisConfig } = require('../config/redis');
+        await reloadRedisConfig();
+        console.log('✅ Redis configuration reloaded after settings update');
+      } catch (error) {
+        console.warn('⚠️ Failed to reload Redis configuration:', error.message);
+        // Don't fail the request if Redis reload fails
+      }
+    }
+
     res.json({
       success: true,
       message: 'Settings updated successfully'
@@ -448,6 +487,91 @@ router.put('/settings', authenticateToken, requireSuperAdmin, async (req, res) =
   } catch (error) {
     console.error('Update settings error:', error);
     res.status(500).json({ success: false, message: 'Failed to update settings' });
+  }
+});
+
+// Test R2 connection endpoint
+router.post('/test-r2', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { SystemSetting } = require('../../models');
+    const AWS = require('aws-sdk');
+
+    // Get R2 settings from database
+    const r2Settings = await SystemSetting.findAll({
+      where: {
+        setting_key: {
+          [require('sequelize').Op.in]: [
+            'r2_access_key_id',
+            'r2_secret_access_key',
+            'r2_bucket_name',
+            'r2_endpoint',
+            'r2_region'
+          ]
+        }
+      }
+    });
+
+    // Convert to object
+    const r2Config = {};
+    r2Settings.forEach(setting => {
+      r2Config[setting.setting_key] = setting.value;
+    });
+
+    // Validate required fields
+    if (!r2Config.r2_access_key_id || !r2Config.r2_secret_access_key || 
+        !r2Config.r2_bucket_name || !r2Config.r2_endpoint) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required R2 configuration. Please fill in all required fields.'
+      });
+    }
+
+    // Configure AWS SDK for R2
+    const s3 = new AWS.S3({
+      endpoint: r2Config.r2_endpoint,
+      accessKeyId: r2Config.r2_access_key_id,
+      secretAccessKey: r2Config.r2_secret_access_key,
+      region: r2Config.r2_region || 'auto',
+      s3ForcePathStyle: true,
+      signatureVersion: 'v4'
+    });
+
+    // Test 1: Check bucket access
+    await s3.headBucket({ Bucket: r2Config.r2_bucket_name }).promise();
+
+    // Test 2: Upload a test file
+    const testKey = `test/${Date.now()}-connection-test.txt`;
+    const testContent = Buffer.from('NxChat R2 Connection Test');
+    
+    await s3.putObject({
+      Bucket: r2Config.r2_bucket_name,
+      Key: testKey,
+      Body: testContent,
+      ContentType: 'text/plain'
+    }).promise();
+
+    // Test 3: Download the test file
+    const downloadResult = await s3.getObject({
+      Bucket: r2Config.r2_bucket_name,
+      Key: testKey
+    }).promise();
+
+    // Test 4: Delete the test file
+    await s3.deleteObject({
+      Bucket: r2Config.r2_bucket_name,
+      Key: testKey
+    }).promise();
+
+    res.json({
+      success: true,
+      message: 'R2 connection test successful! All operations (upload, download, delete) completed successfully.'
+    });
+  } catch (error) {
+    console.error('R2 test error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to test R2 connection. Please check your configuration.'
+    });
   }
 });
 
@@ -800,6 +924,177 @@ router.post('/companies/:companyId/widget-key', authenticateToken, requireSuperA
     res.status(500).json({
       success: false,
       message: 'Failed to generate widget key'
+    });
+  }
+});
+
+// Configure multer for logo and favicon uploads
+const logoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit for logos
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
+    
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only images (JPEG, PNG, GIF, WebP, SVG) are allowed.'), false);
+    }
+  }
+});
+
+// Upload app logo
+router.post('/upload-logo', authenticateToken, requireSuperAdmin, logoUpload.single('logo'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
+      });
+    }
+
+    // Validate file type
+    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
+    if (!allowedMimes.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid file type. Only images (JPEG, PNG, GIF, WebP, SVG) are allowed.'
+      });
+    }
+
+    // Generate unique file name
+    const fileExt = path.extname(req.file.originalname) || (req.file.mimetype === 'image/svg+xml' ? '.svg' : '.png');
+    const fileName = `app-assets/logo/${uuidv4()}${fileExt}`;
+
+    console.log('📤 Uploading app logo:', {
+      fileName: req.file.originalname,
+      size: req.file.size,
+      type: req.file.mimetype,
+      targetFileName: fileName
+    });
+
+    // Upload to storage (R2 or configured provider)
+    let fileUrl;
+    try {
+      fileUrl = await uploadFile(fileName, req.file.buffer, req.file.mimetype);
+      console.log('✅ Logo uploaded successfully:', fileUrl);
+    } catch (uploadError) {
+      console.error('❌ Logo upload error:', uploadError);
+      return res.status(500).json({
+        success: false,
+        message: uploadError.message || 'Failed to upload logo'
+      });
+    }
+
+    // Save logo URL to system settings
+    const { SystemSetting } = require('../../models');
+    const [logoSetting, created] = await SystemSetting.findOrCreate({
+      where: { setting_key: 'app_logo' },
+      defaults: {
+        setting_key: 'app_logo',
+        value: fileUrl,
+        description: 'Application logo URL',
+        category: 'general'
+      }
+    });
+
+    if (!created) {
+      await logoSetting.update({ value: fileUrl });
+    }
+
+    res.json({
+      success: true,
+      message: 'Logo uploaded successfully',
+      data: {
+        url: fileUrl,
+        filename: req.file.originalname,
+        size: req.file.size
+      }
+    });
+  } catch (error) {
+    console.error('Upload logo error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to upload logo'
+    });
+  }
+});
+
+// Upload app favicon
+router.post('/upload-favicon', authenticateToken, requireSuperAdmin, logoUpload.single('favicon'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
+      });
+    }
+
+    // Validate file type
+    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/x-icon', 'image/vnd.microsoft.icon'];
+    if (!allowedMimes.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid file type. Only images (JPEG, PNG, GIF, WebP, SVG, ICO) are allowed.'
+      });
+    }
+
+    // Generate unique file name
+    const fileExt = path.extname(req.file.originalname) || '.ico';
+    const fileName = `app-assets/favicon/${uuidv4()}${fileExt}`;
+
+    console.log('📤 Uploading app favicon:', {
+      fileName: req.file.originalname,
+      size: req.file.size,
+      type: req.file.mimetype,
+      targetFileName: fileName
+    });
+
+    // Upload to storage (R2 or configured provider)
+    let fileUrl;
+    try {
+      fileUrl = await uploadFile(fileName, req.file.buffer, req.file.mimetype);
+      console.log('✅ Favicon uploaded successfully:', fileUrl);
+    } catch (uploadError) {
+      console.error('❌ Favicon upload error:', uploadError);
+      return res.status(500).json({
+        success: false,
+        message: uploadError.message || 'Failed to upload favicon'
+      });
+    }
+
+    // Save favicon URL to system settings
+    const { SystemSetting } = require('../../models');
+    const [faviconSetting, created] = await SystemSetting.findOrCreate({
+      where: { setting_key: 'app_favicon' },
+      defaults: {
+        setting_key: 'app_favicon',
+        value: fileUrl,
+        description: 'Application favicon URL',
+        category: 'general'
+      }
+    });
+
+    if (!created) {
+      await faviconSetting.update({ value: fileUrl });
+    }
+
+    res.json({
+      success: true,
+      message: 'Favicon uploaded successfully',
+      data: {
+        url: fileUrl,
+        filename: req.file.originalname,
+        size: req.file.size
+      }
+    });
+  } catch (error) {
+    console.error('Upload favicon error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to upload favicon'
     });
   }
 });

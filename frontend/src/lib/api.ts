@@ -26,6 +26,10 @@ class ApiClient {
             config.headers.Authorization = `Bearer ${token}`;
           }
         }
+        // Don't set Content-Type for FormData - let axios handle it automatically
+        if (config.data instanceof FormData) {
+          delete config.headers['Content-Type'];
+        }
         return config;
       },
       (error) => {
@@ -78,6 +82,11 @@ class ApiClient {
 
   async register(userData: RegisterRequest): Promise<AuthResponse> {
     const response: AxiosResponse<AuthResponse> = await this.client.post('/auth/register', userData);
+    return response.data;
+  }
+
+  async getRegistrationStatus(): Promise<{ success: boolean; enabled: boolean }> {
+    const response: AxiosResponse<{ success: boolean; enabled: boolean }> = await this.client.get('/auth/registration-status');
     return response.data;
   }
 
@@ -375,6 +384,17 @@ class ApiClient {
     return response.data;
   }
 
+  async getVisitorHistory(params?: { status?: string; search?: string; page?: number; limit?: number }): Promise<ApiResponse> {
+    const response: AxiosResponse<ApiResponse> = await this.client.get('/agent/visitor-history', { params });
+    return response.data;
+  }
+
+  // Get visitor messages
+  async getVisitorMessages(visitorId: string, params?: { limit?: number; before?: string }): Promise<ApiResponse> {
+    const response: AxiosResponse<ApiResponse> = await this.client.get(`/agent/visitors/${visitorId}/messages`, { params });
+    return response.data;
+  }
+
   async getVisitor(id: string): Promise<ApiResponse> {
     const response: AxiosResponse<ApiResponse> = await this.client.get(`/agent/visitors/${id}`);
     return response.data;
@@ -392,6 +412,21 @@ class ApiClient {
 
   async updateVisitorNotes(visitorId: string, notes: string): Promise<ApiResponse> {
     const response: AxiosResponse<ApiResponse> = await this.client.put(`/agent/visitors/${visitorId}/notes`, { notes });
+    return response.data;
+  }
+
+  async banVisitor(visitorId: string, reason?: string): Promise<ApiResponse> {
+    const response: AxiosResponse<ApiResponse> = await this.client.post(`/agent/visitors/${visitorId}/ban`, { reason });
+    return response.data;
+  }
+
+  async getBannedIPs(): Promise<ApiResponse> {
+    const response: AxiosResponse<ApiResponse> = await this.client.get('/agent/banned-ips');
+    return response.data;
+  }
+
+  async unbanIP(bannedIPId: number): Promise<ApiResponse> {
+    const response: AxiosResponse<ApiResponse> = await this.client.post(`/agent/banned-ips/${bannedIPId}/unban`);
     return response.data;
   }
 
@@ -591,6 +626,12 @@ class ApiClient {
     return response.data;
   }
 
+  // Get list of agents for transfer (available to agents)
+  async getAgentsList(): Promise<ApiResponse> {
+    const response: AxiosResponse<ApiResponse> = await this.client.get('/agent/agents/list');
+    return response.data;
+  }
+
   async getAgentWorkload(): Promise<ApiResponse> {
     const response: AxiosResponse<ApiResponse> = await this.client.get('/agent/workload');
     return response.data;
@@ -604,6 +645,56 @@ class ApiClient {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+    });
+    return response.data;
+  }
+
+  // Upload avatar to R2
+  async uploadAvatar(file: File): Promise<ApiResponse> {
+    const formData = new FormData();
+    formData.append('avatar', file);
+    
+    const response: AxiosResponse<ApiResponse> = await this.client.post('/uploads/avatar', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  }
+
+  // Upload agent image to local agent_images folder
+  async uploadAgentImage(file: File): Promise<ApiResponse> {
+    const formData = new FormData();
+    formData.append('avatar', file);
+    const response: AxiosResponse<ApiResponse> = await this.client.post('/uploads/agent-image', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  }
+
+  // Upload chat attachment to R2
+  async uploadChatAttachment(file: File, chatId: string, messageId?: string): Promise<ApiResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('chat_id', chatId);
+    if (messageId) {
+      formData.append('message_id', messageId);
+    }
+    
+    const response: AxiosResponse<ApiResponse> = await this.client.post('/uploads/chat-attachment', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  }
+
+  // Delete file from R2
+  async deleteFile(fileUrl: string): Promise<ApiResponse> {
+    const response: AxiosResponse<ApiResponse> = await this.client.delete('/uploads/file', {
+      data: { file_url: fileUrl }
     });
     return response.data;
   }

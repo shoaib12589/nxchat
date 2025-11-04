@@ -3,8 +3,32 @@ const router = express.Router();
 const authController = require('../controllers/authController');
 const { authLimiter, validateRequest, validateEmail, validatePassword, validateName } = require('../middleware/validation');
 const { authenticateToken } = require('../middleware/auth');
+const { SystemSetting } = require('../models');
 
 // Public routes
+// Check if registration is enabled (public endpoint)
+router.get('/registration-status', async (req, res) => {
+  try {
+    const registrationSetting = await SystemSetting.findOne({
+      where: { setting_key: 'enable_registration' }
+    });
+    
+    const isRegistrationEnabled = registrationSetting ? registrationSetting.value === 'true' : true;
+    
+    res.json({
+      success: true,
+      enabled: isRegistrationEnabled
+    });
+  } catch (error) {
+    console.error('Get registration status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check registration status',
+      enabled: true // Default to enabled on error
+    });
+  }
+});
+
 router.post('/register', 
   authLimiter,
   validateEmail(),

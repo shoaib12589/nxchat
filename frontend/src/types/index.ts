@@ -78,11 +78,11 @@ export interface Department {
 export interface Chat {
   id: number;
   tenant_id: number;
-  customer_id: number;
+  customer_id?: number;
   agent_id?: number;
   department_id?: number;
-  status: 'waiting' | 'active' | 'closed';
-  priority: 'low' | 'medium' | 'high' | 'urgent';
+  status: 'waiting' | 'active' | 'closed' | 'transferred' | 'completed' | 'visitor_left';
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
   subject?: string;
   started_at?: string;
   ended_at?: string;
@@ -95,6 +95,10 @@ export interface Chat {
   department?: Department;
   messages?: Message[];
   callSessions?: CallSession[];
+  // Fields from Chat model that may exist even without customer_id
+  customer_name?: string;
+  customer_email?: string;
+  customer_phone?: string;
 }
 
 // Message types
@@ -125,11 +129,23 @@ export interface Ticket {
   description: string;
   status: 'open' | 'pending' | 'resolved' | 'closed';
   priority: 'low' | 'medium' | 'high' | 'urgent';
+  category?: string;
+  tags?: string[];
   created_at: string;
   updated_at: string;
   customer?: User;
   agent?: User;
   department?: Department;
+  metadata?: {
+    notes?: Array<{
+      id: string;
+      content: string;
+      author: string;
+      createdAt: string;
+      type: 'reply' | 'note';
+    }>;
+    [key: string]: any;
+  };
 }
 
 // Trigger types
@@ -185,6 +201,7 @@ export interface WidgetSetting {
   ai_enabled: boolean;
   ai_personality: string;
   auto_transfer_keywords: string[];
+  ai_welcome_message?: string;
   offline_message: string;
   custom_css?: string;
   custom_js?: string;
@@ -332,6 +349,17 @@ export interface DashboardStats {
   averageResponseTime?: number;
   customerSatisfaction?: number;
   activeAgents?: number;
+  recentChats?: Chat[];
+  recentTickets?: Ticket[];
+  trends?: {
+    chats?: number;
+    tickets?: number;
+  };
+  aiMessages?: {
+    used: number;
+    limit: number;
+    usagePercentage: number;
+  };
 }
 
 export interface AnalyticsData {

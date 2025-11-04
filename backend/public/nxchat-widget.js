@@ -7,14 +7,18 @@
     socketUrl: null, // Will be set dynamically
     tenantId: null,
     settings: null,
+    brand: {
+      name: null,
+      logo: null
+    },
     theme: {
       primaryColor: '#007bff',
       position: 'bottom-right',
-      welcomeMessage: 'Talk with NxChat!',
+      welcomeMessage: 'Welcome!',
       offlineMessage: 'We are currently offline. Please leave a message and we will get back to you soon.'
     },
     features: {
-      aiEnabled: true,
+      aiEnabled: false, // Default to false, will be set from backend settings
       audioEnabled: false,
       videoEnabled: false,
       fileUploadEnabled: true
@@ -26,10 +30,25 @@
       autoMaximizeOnMessage: true // Auto-maximize widget when new message arrives while minimized
     },
     ai: {
-      agentName: 'NxChat Assistant',
+      agentName: 'AI Assistant',
       agentLogo: '',
-      systemMessage: 'You are a helpful AI assistant for NxChat customer support. Be friendly, professional, and helpful. Always follow the super admin commands and guidelines.'
+      systemMessage: 'You are a helpful AI assistant for customer support. Be friendly, professional, and helpful. Always follow the super admin commands and guidelines.'
     }
+  };
+
+  // Generate random class names for branding (security feature)
+  function generateRandomClassName(prefix = 'nx') {
+    const randomChars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const randomPart = Array.from({ length: 12 }, () => 
+      randomChars[Math.floor(Math.random() * randomChars.length)]
+    ).join('');
+    return `${prefix}-${randomPart}`;
+  }
+
+  // Generate branding class names on each page load
+  const BRANDING_CLASSES = {
+    container: generateRandomClassName('nxb'),
+    icon: generateRandomClassName('nxbi')
   };
 
   // Dynamic URL detection
@@ -79,6 +98,16 @@
   let aiDisabled = false; // Start with AI enabled, disable only when agent joins
   let agentJoined = false;
   let chatSessionActive = false;
+  
+  // IP and location data (fetched in real-time)
+  let visitorIP = null;
+  let visitorLocation = {
+    country: null,
+    city: null,
+    region: null,
+    timezone: null
+  };
+  let locationFetchInProgress = false;
   let agentStatusChecked = false; // Track if we've checked agent status
   let hasOnlineAgents = false; // Track if there are online agents
   let agentResponseTimeout = null;
@@ -93,7 +122,8 @@
   let sessionDuration = 0;
   let isTyping = false;
   let settingsLoaded = false;
-  let currentTab = 'chat'; // 'chat' or 'helpdesk'
+let currentTab = 'chat'; // 'chat' or 'helpdesk'
+let onlineAgents = []; // Store online agents with avatars
 
   // DOM elements
   let widgetContainer = null;
@@ -116,14 +146,25 @@
     createWidgetHTML();
     attachEventListeners();
     
+    // Check agent availability and fetch avatars after widget is created
+    await checkAgentAvailability();
+    
+    // If this is a returning visitor, show current agent (if still active)
+    setTimeout(() => {
+      try { checkAndShowActiveAgent(); } catch (_e) {}
+    }, 400);
+    
+    // Fetch IP and location data immediately when widget loads
+    fetchIPAndLocation();
+    
     // Track widget initialization
     trackVisitorActivity('widget_init', {
       widget_version: '1.0.0',
       tenant_id: tenantId
     });
     
-    // Initialize visitor tracking first
-    initVisitorTracking();
+    // Initialize visitor tracking first (async - waits for location fetch)
+    await initVisitorTracking();
     
     // Initialize socket connection
     initSocket();
@@ -202,10 +243,29 @@
       console.log('Visitor room joined successfully, ready to receive messages');
     });
     
-    // Listen for agent join event
+    // Listen for transfer notification (when AI or system transfers chat to agent)
+    socket.on('visitor:transfer', (data) => {
+      if (data.visitorId === visitorId) {
+        // Show transfer in progress message, NOT "Agent joined"
+        // The chat is now in the transfer pool - no specific agent has joined yet
+        addMessage("I'm transferring you to a human agent. An agent will be with you shortly. You can continue chatting with me while you wait.", 'system');
+        
+        // Don't set agentJoined = true yet - wait until agent actually clicks to join
+        // Don't disable AI yet either - visitor can continue chatting with AI
+        agentJoined = false;
+        aiDisabled = false; // Keep AI enabled until agent actually joins
+        agentStatusChecked = true;
+        hasOnlineAgents = true;
+        
+        // Update UI to show transfer in progress but AI still available
+        updateChatHeader('AI Assistant');
+      }
+    });
+
+    // Listen for agent join event (when agent manually clicks "Join Chat" in dashboard)
     socket.on('agent:join', (data) => {
       if (data.visitorId === visitorId) {
-        // Always show agent joined message
+        // Only show "Agent joined" when agent actually clicks to join
         addMessage(`${data.agentName} joined the chat.`, 'system');
         
         agentJoined = true;
@@ -216,6 +276,7 @@
         
         // Update UI to show agent is handling the chat
         updateChatHeader('Agent Connected');
+        showCurrentAgent(data.agentId, data.agentName);
         
         // Clear any existing timeout since agent just joined
         clearAgentResponseTimeout();
@@ -235,20 +296,66 @@
         
         // Show agent left message with agent name if available
         const agentName = data.agentName || 'Agent';
+        if (CONFIG.features.aiEnabled) {
         addMessage(`${agentName} left the chat. AI responses are now enabled.`, 'system');
+        } else {
+          addMessage(`${agentName} left the chat.`, 'system');
+        }
         
-        // Update UI to show AI is handling the chat
+        // Show rating form when agent leaves
+        showRatingForm();
+        
+        // Update UI to show AI is handling the chat (only if AI is enabled)
+        if (CONFIG.features.aiEnabled) {
+          if (CONFIG.features.aiEnabled) {
         updateChatHeader('AI Assistant');
+    } else {
+      updateChatHeader('Chat');
+    }
+        } else {
+          updateChatHeader('Chat');
+        }
         
+        // Remove current agent banner from header
+        try {
+          const header = widgetContainer?.querySelector('.nxchat-header');
+          const current = header?.querySelector('.nxchat-current-agent');
+          if (current && current.parentNode) current.parentNode.removeChild(current);
+          // Restore team avatars and response-time when agent leaves
+          showTeamMeta();
+        } catch (_e) {}
+
         // Clear timeout since agent left
         clearAgentResponseTimeout();
       }
     });
 
     // Listen for agent messages
+    // Listen for agent typing indicators
+    socket.on('agent:typing', (data) => {
+      if (data && typeof data.isTyping === 'boolean') {
+        showAgentTypingIndicator(data.isTyping, data.agentName);
+      }
+    });
+
     socket.on('agent:message', (data) => {
       if (data.visitorId === visitorId) {
-        addMessage(data.message, 'agent');
+        // Add message with messageId for seen tracking
+        addMessage(data.message, 'agent', { messageId: data.messageId });
+        
+        // Mark message as seen when displayed (visitor viewed it)
+        // Use Intersection Observer to detect when message is visible
+        setTimeout(() => {
+          if (socket && isConnected && visitorId && data.messageId) {
+            // Emit message seen event to backend
+            socket.emit('message:seen', {
+              visitorId: visitorId,
+              messageId: data.messageId,
+              timestamp: new Date().toISOString()
+            });
+            console.log('Message seen event emitted:', data.messageId);
+          }
+        }, 500); // Small delay to ensure message is rendered
         
         // Play notification sound for new agent message
         playNotificationSound();
@@ -320,7 +427,114 @@
   function updateChatHeader(title) {
     const header = document.querySelector('.nxchat-header h3');
     if (header) {
-      header.textContent = title;
+      // If title is 'AI Assistant' or '「' but AI is disabled, show brand name instead
+      if ((title === 'AI Assistant' || title === 'Chat') && !CONFIG.features.aiEnabled) {
+        header.textContent = CONFIG.brand.name || 'Chat';
+      } else {
+        header.textContent = title;
+      }
+    }
+  }
+
+  // Show current agent (avatar + name) in header with animation
+  async function showCurrentAgent(agentId, fallbackName) {
+    try {
+      let agent = null;
+      if (agentId) {
+        const resp = await fetch(`${CONFIG.apiUrl}/widget/agent/${agentId}`);
+        const data = await resp.json();
+        if (data.success) agent = data.data;
+      }
+      const name = agent?.name || fallbackName || 'Agent';
+      const avatar = agent?.avatar || '';
+
+      const header = widgetContainer?.querySelector('.nxchat-header');
+      if (!header) return;
+
+      let current = header.querySelector('.nxchat-current-agent');
+      if (!current) {
+        current = document.createElement('div');
+        current.className = 'nxchat-current-agent';
+        current.style.cssText = `display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px;opacity:0;transform:translateY(-6px);transition:opacity 220ms ease, transform 220ms ease;`;
+        header.insertBefore(current, header.firstChild);
+      }
+
+      const avatarWrap = document.createElement('div');
+      avatarWrap.style.cssText = `width:44px;height:44px;border-radius:50%;overflow:hidden;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,0.2);background:#ddd;flex:0 0 auto;`;
+      if (avatar) {
+        const img = document.createElement('img');
+        img.src = avatar;
+        img.alt = name;
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
+        img.onload = () => { avatarWrap.style.background = 'transparent'; };
+        img.onerror = () => { avatarWrap.style.background = '#888'; };
+        avatarWrap.appendChild(img);
+      } else {
+        const span = document.createElement('span');
+        span.textContent = (name || 'A').charAt(0).toUpperCase();
+        span.style.cssText = 'display:flex;width:100%;height:100%;align-items:center;justify-content:center;color:#fff;font-weight:bold;';
+        avatarWrap.appendChild(span);
+      }
+
+      const nameEl = document.createElement('div');
+      nameEl.textContent = name;
+      nameEl.style.cssText = 'font-weight:600;color:#fff;text-shadow:0 1px 1px rgba(0,0,0,0.2)';
+
+      current.innerHTML = '';
+      current.appendChild(avatarWrap);
+      current.appendChild(nameEl);
+
+      requestAnimationFrame(() => {
+        current.style.opacity = '1';
+        current.style.transform = 'translateY(0)';
+      });
+
+      // Hide team avatars and response-time while agent banner is shown
+      hideTeamMeta();
+
+      // Keep agent banner visible while agent is connected
+    } catch (e) {
+      console.warn('Failed to show current agent in header:', e);
+    }
+  }
+
+  // Hide team avatars row and response time text
+  function hideTeamMeta() {
+    try {
+      const header = widgetContainer?.querySelector('.nxchat-header');
+      const team = header?.querySelector('.nxchat-team-avatars');
+      const resp = header?.querySelector('.nxchat-response-time');
+      if (team) team.style.display = 'none';
+      if (resp) resp.style.display = 'none';
+    } catch (_e) {}
+  }
+
+  // Show team avatars row and response time text (restore explicit display values)
+  function showTeamMeta() {
+    try {
+      const header = widgetContainer?.querySelector('.nxchat-header');
+      const team = header?.querySelector('.nxchat-team-avatars');
+      const resp = header?.querySelector('.nxchat-response-time');
+      if (team) team.style.display = 'flex';
+      if (resp) resp.style.display = 'flex';
+    } catch (_e) {}
+  }
+
+  // Check server for an active session with assigned agent and show in header
+  async function checkAndShowActiveAgent() {
+    try {
+      if (!visitorId || !CONFIG.tenantId) return;
+      const resp = await fetch(`${CONFIG.apiUrl}/widget/visitor/session-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitorId, tenantId: CONFIG.tenantId })
+      });
+      const data = await resp.json();
+      if (data?.success && data.data?.hasActiveSession && data.data?.assignedAgentId) {
+        showCurrentAgent(data.data.assignedAgentId);
+      }
+    } catch (e) {
+      console.warn('Failed to check active agent for returning visitor:', e);
     }
   }
 
@@ -495,19 +709,42 @@
     chatSessionActive = false;
     hasOnlineAgents = false;
     
+    // Check agent availability first
+    await checkAgentAvailability();
+    
+    // If no agents are online and AI is disabled, show offline form
+    if (!hasOnlineAgents && !CONFIG.features.aiEnabled) {
+      console.log('No agents online and AI disabled - showing offline form');
+      // Clear chat history first
+      clearChatHistory();
+      // Show welcome message then form
+      addMessage(CONFIG.theme.offlineMessage || 'All agents are currently offline. Please leave us a message and we\'ll get back to you soon!', 'system');
+      setTimeout(() => {
+        showOfflineForm();
+      }, 500);
+      return;
+    }
+    
     // Enable AI
     if (CONFIG.features.aiEnabled) {
       aiDisabled = false;
     }
     
     // Update UI to show AI is handling the chat
+    if (CONFIG.features.aiEnabled) {
     updateChatHeader('AI Assistant');
+    } else {
+      updateChatHeader('Chat');
+    }
+
+    // For a fresh session (including returning visitors starting over), clear any old chat history
+    // so the welcome message from Brand Settings can be displayed consistently
+    clearChatHistory();
     
-    // Load chat history (will be empty for new visitors)
-    loadChatHistory();
-    
-    // Check agent availability in background (for future transfers)
-    await checkAgentAvailability();
+    // Render chat content now so the correct welcome message appears immediately
+    if (typeof showChatContent === 'function') {
+      showChatContent();
+    }
   }
 
   // Initialize AI session (for returning visitors continuing with AI)
@@ -520,7 +757,11 @@
     chatSessionActive = true; // Mark as active since it's continuing
     
     // Update UI to show AI is handling the chat
+    if (CONFIG.features.aiEnabled) {
     updateChatHeader('AI Assistant');
+    } else {
+      updateChatHeader('Chat');
+    }
     
     // Load existing chat history
     loadChatHistory();
@@ -565,6 +806,11 @@
           hasOnlineAgents: hasOnlineAgents,
           onlineAgentCount: data.data.onlineAgentCount
         });
+        
+        // Fetch online agents with avatars
+        if (hasOnlineAgents) {
+          await fetchOnlineAgents();
+        }
       } else {
         console.error('Failed to check agent availability:', data.message);
         hasOnlineAgents = false;
@@ -573,6 +819,91 @@
       console.error('Error checking agent availability:', error);
       hasOnlineAgents = false;
     }
+  }
+
+  // Fetch online agents with avatars
+  async function fetchOnlineAgents() {
+    try {
+      const response = await fetch(`${CONFIG.apiUrl}/widget/online-agents/${CONFIG.tenantId}`);
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        onlineAgents = data.data.slice(0, 4); // Get first 4 agents
+        // Update header if widget is already created
+        if (widgetContainer) {
+          updateHeaderAvatars();
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching online agents:', error);
+      onlineAgents = [];
+    }
+  }
+
+  // Update header avatars
+  function updateHeaderAvatars() {
+    const teamSection = widgetContainer?.querySelector('.nxchat-team-avatars');
+    if (!teamSection) return;
+
+    teamSection.innerHTML = '';
+    
+    // Show up to 4 agents, or show placeholder if no agents
+    const agentsToShow = onlineAgents.slice(0, 4);
+    
+    if (agentsToShow.length === 0) {
+      // Show placeholder if no agents available
+      return;
+    }
+    
+    agentsToShow.forEach((agent, index) => {
+      const avatarDiv = document.createElement('div');
+      avatarDiv.className = 'nxchat-agent-avatar';
+      avatarDiv.style.cssText = `
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 2px solid #fff;
+        box-shadow: 0 0 0 2px rgba(0,0,0,0.2);
+        overflow: hidden;
+        background: #ddd;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-left: ${index > 0 ? '-14px' : '0'};
+        position: relative;
+        z-index: ${4 - index};
+      `;
+      
+      if (agent.avatar) {
+        const img = document.createElement('img');
+        img.src = agent.avatar;
+        img.alt = agent.name || 'Agent';
+        img.style.cssText = 'width: 100%; height: 100%; object-fit: cover; display:block;';
+        img.onload = function() {
+          // Remove placeholder background once image loads
+          avatarDiv.style.background = 'transparent';
+        };
+        img.onerror = function() {
+          // Fallback to initials if image fails to load
+          this.style.display = 'none';
+          avatarDiv.textContent = (agent.name || 'A').charAt(0).toUpperCase();
+          avatarDiv.style.fontSize = '14px';
+          avatarDiv.style.fontWeight = 'bold';
+          avatarDiv.style.color = 'white';
+          avatarDiv.style.background = '#888';
+        };
+        avatarDiv.appendChild(img);
+      } else {
+        // Fallback to initials
+        avatarDiv.textContent = (agent.name || 'A').charAt(0).toUpperCase();
+        avatarDiv.style.fontSize = '14px';
+        avatarDiv.style.fontWeight = 'bold';
+        avatarDiv.style.color = 'white';
+        avatarDiv.style.background = '#888';
+      }
+      
+      teamSection.appendChild(avatarDiv);
+    });
   }
 
   // Load widget settings
@@ -587,7 +918,8 @@
         CONFIG.theme.position = data.data.position || CONFIG.theme.position;
         CONFIG.theme.welcomeMessage = data.data.welcome_message || CONFIG.theme.welcomeMessage;
         CONFIG.theme.offlineMessage = data.data.offline_message || CONFIG.theme.offlineMessage;
-        CONFIG.features.aiEnabled = data.data.ai_enabled || CONFIG.features.aiEnabled;
+        // Properly handle ai_enabled - false should mean disabled, not use default
+        CONFIG.features.aiEnabled = data.data.ai_enabled !== undefined ? data.data.ai_enabled : CONFIG.features.aiEnabled;
         CONFIG.features.audioEnabled = data.data.enable_audio || CONFIG.features.audioEnabled;
         CONFIG.features.videoEnabled = data.data.enable_video || CONFIG.features.videoEnabled;
         CONFIG.features.fileUploadEnabled = data.data.enable_file_upload || CONFIG.features.fileUploadEnabled;
@@ -602,6 +934,21 @@
         CONFIG.ai.agentName = data.data.ai_agent_name || CONFIG.ai.agentName;
         CONFIG.ai.agentLogo = data.data.ai_agent_logo || CONFIG.ai.agentLogo;
         CONFIG.ai.systemMessage = data.data.ai_system_message || CONFIG.ai.systemMessage;
+        
+        // Load brand information
+        if (window.NxChatConfig && window.NxChatConfig.brandName) {
+          CONFIG.brand.name = window.NxChatConfig.brandName;
+          CONFIG.brand.logo = window.NxChatConfig.brandLogo || data.data.logo_url || null;
+        } else {
+          // Fallback to brand name from company or default (avoid hardcoded NxChat)
+          CONFIG.brand.name = data.data.brand_name || 'Support';
+          CONFIG.brand.logo = data.data.logo_url || null;
+        }
+
+        // Ensure AI agent name defaults to brand name when not explicitly configured
+        if (!data.data.ai_agent_name || (typeof data.data.ai_agent_name === 'string' && data.data.ai_agent_name.trim() === '')) {
+          CONFIG.ai.agentName = CONFIG.brand.name || 'AI Assistant';
+        }
         
         // Apply custom CSS if provided
         if (data.data.custom_css) {
@@ -805,34 +1152,22 @@
 
     // Team avatars section
     const teamSection = document.createElement('div');
-    teamSection.style.cssText = 'display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 12px;';
-
-    // Create team avatars
-    const avatars = ['👩', '👨', '👩', '💬'];
-    avatars.forEach((avatar, index) => {
-      const avatarDiv = document.createElement('div');
-      avatarDiv.style.cssText = `
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        background: ${index === 3 ? CONFIG.theme.primaryColor : 'rgba(255, 255, 255, 0.2)'};
-        border: ${index === 3 ? '2px solid white' : 'none'};
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 16px;
-      `;
-      avatarDiv.textContent = avatar;
-      teamSection.appendChild(avatarDiv);
-    });
+    teamSection.className = 'nxchat-team-avatars';
+    teamSection.style.cssText = 'display: flex; align-items: center; justify-content: center; margin-bottom: 12px;';
+    
+    // Initially show placeholder or load agents
+    if (onlineAgents.length > 0) {
+      updateHeaderAvatars();
+    }
 
     // Welcome message
     const welcomeDiv = document.createElement('div');
     welcomeDiv.style.cssText = 'text-align: center; margin-bottom: 8px;';
-    welcomeDiv.innerHTML = `${CONFIG.theme.welcomeMessage} 😊`;
+    // welcomeDiv.innerHTML = `${CONFIG.theme.welcomeMessage} 😊`;
 
     // Response time indicator
     const responseTimeDiv = document.createElement('div');
+    responseTimeDiv.className = 'nxchat-response-time';
     responseTimeDiv.style.cssText = 'text-align: center; font-size: 12px; opacity: 0.8; display: flex; align-items: center; justify-content: center; gap: 4px;';
     responseTimeDiv.innerHTML = `
       <div style="width: 6px; height: 6px; background: #4CAF50; border-radius: 50%;"></div>
@@ -1007,22 +1342,6 @@
       transition: all 0.2s ease;
     `;
 
-    const starButton = document.createElement('button');
-    starButton.innerHTML = `
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/>
-      </svg>
-    `;
-    starButton.style.cssText = `
-      background: none;
-      border: none;
-      cursor: pointer;
-      padding: 8px;
-      color: #666;
-      border-radius: 4px;
-      transition: all 0.2s ease;
-    `;
-
     // Add functionality to buttons
     emojiButton.addEventListener('click', () => {
       showEmojiPicker(emojiButton);
@@ -1032,12 +1351,8 @@
       handleFileAttachment();
     });
 
-    starButton.addEventListener('click', () => {
-      toggleFavorite();
-    });
-
     // Add hover effects
-    [emojiButton, attachButton, starButton].forEach(button => {
+    [emojiButton, attachButton].forEach(button => {
       button.addEventListener('mouseenter', () => {
         button.style.background = '#f0f0f0';
         button.style.color = '#333';
@@ -1050,14 +1365,13 @@
 
     iconsDiv.appendChild(emojiButton);
     iconsDiv.appendChild(attachButton);
-    iconsDiv.appendChild(starButton);
 
     // Right side: Branding
     const brandingDiv = document.createElement('div');
-    brandingDiv.className = 'nxchat-branding';
+    brandingDiv.className = BRANDING_CLASSES.container;
     brandingDiv.style.cssText = 'display: flex; align-items: center; gap: 4px; font-size: 12px; color: #999;';
     brandingDiv.innerHTML = `
-      We run on <div class="nxchat-branding-icon">N</div> NxChat
+      We run on <div class="${BRANDING_CLASSES.icon}">N</div> NxChat
     `;
 
     bottomRow.appendChild(iconsDiv);
@@ -1241,23 +1555,23 @@
         z-index: 2;
       }
       
-      .nxchat-branding {
+      .${BRANDING_CLASSES.container} {
         text-align: right;
         font-size: 11px;
         color: #999;
         margin-top: 8px;
-        display: flex;
+        display: flex !important;
         align-items: center;
         justify-content: flex-end;
         gap: 4px;
       }
       
-      .nxchat-branding-icon {
+      .${BRANDING_CLASSES.icon} {
         width: 12px;
         height: 12px;
         background: ${CONFIG.theme.primaryColor};
         border-radius: 2px;
-        display: flex;
+        display: flex !important;
         align-items: center;
         justify-content: center;
         color: white;
@@ -1417,6 +1731,50 @@
   }
 
   // Add message to chat
+  // Show/hide agent typing indicator
+  let agentTypingIndicator = null;
+  function showAgentTypingIndicator(isTyping, agentName) {
+    if (!messageContainer) return;
+    
+    if (isTyping) {
+      // Remove existing indicator if any
+      if (agentTypingIndicator) {
+        agentTypingIndicator.remove();
+      }
+      
+      // Create typing indicator
+      agentTypingIndicator = document.createElement('div');
+      agentTypingIndicator.className = 'nxchat-agent-typing-indicator';
+      agentTypingIndicator.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        color: #666;
+        font-style: italic;
+        padding: 12px;
+        background: #f0f0f0;
+        border-radius: 8px;
+      `;
+      agentTypingIndicator.innerHTML = `
+        <div style="display: flex; gap: 4px;">
+          <div style="width: 6px; height: 6px; background: #666; border-radius: 50%; animation: bounce 1.4s infinite;"></div>
+          <div style="width: 6px; height: 6px; background: #666; border-radius: 50%; animation: bounce 1.4s infinite; animation-delay: 0.2s;"></div>
+          <div style="width: 6px; height: 6px; background: #666; border-radius: 50%; animation: bounce 1.4s infinite; animation-delay: 0.4s;"></div>
+        </div>
+        <div>${agentName || 'Agent'} is typing...</div>
+      `;
+      messageContainer.appendChild(agentTypingIndicator);
+      messageContainer.scrollTop = messageContainer.scrollHeight;
+    } else {
+      // Remove typing indicator
+      if (agentTypingIndicator) {
+        agentTypingIndicator.remove();
+        agentTypingIndicator = null;
+      }
+    }
+  }
+
   function addMessage(content, type = 'bot', options = {}) {
     // Check if we should auto-maximize the widget
     if (shouldAutoMaximizeOnMessage(type)) {
@@ -1474,11 +1832,19 @@
       } else if (type === 'bot') {
         avatar.style.background = '#f0f0f0';
         avatar.style.color = '#666';
-        // Use AI agent logo if available, otherwise use default emoji
-        if (CONFIG.ai.agentLogo && CONFIG.ai.agentLogo.trim() !== '') {
+        
+        // Prefer brand logo; fall back to AI agent logo; then brand initial
+        const brandLogo = CONFIG.brand.logo || CONFIG.settings?.logo_url;
+        const brandName = CONFIG.brand.name || 'Support';
+        if (brandLogo && brandLogo.trim() !== '') {
+          avatar.innerHTML = `<img src="${brandLogo}" alt="${brandName}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" />`;
+        } else if (CONFIG.ai.agentLogo && CONFIG.ai.agentLogo.trim() !== '') {
           avatar.innerHTML = `<img src="${CONFIG.ai.agentLogo}" alt="${CONFIG.ai.agentName}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" />`;
         } else {
-          avatar.innerHTML = '💬';
+          const initial = brandName.charAt(0).toUpperCase();
+          avatar.style.background = CONFIG.theme.primaryColor;
+          avatar.style.color = 'white';
+          avatar.innerHTML = initial;
         }
       } else if (type === 'agent') {
         avatar.style.background = '#28a745';
@@ -1511,7 +1877,8 @@
       } else if (type === 'agent') {
         label.textContent = 'Agent';
       } else {
-        label.textContent = CONFIG.ai.agentName;
+        // Always prefer brand name for bot label; fall back to AI agent name
+        label.textContent = CONFIG.brand.name || CONFIG.ai.agentName || 'Support';
       }
 
       // Message bubble
@@ -1540,7 +1907,54 @@
         bubble.style.borderBottomLeftRadius = '4px';
       }
       
-      bubble.innerHTML = content;
+      // Handle file attachments
+      if (options && options.file_url) {
+        bubble.innerHTML = content || '';
+        const fileContainer = document.createElement('div');
+        fileContainer.style.cssText = 'margin-top: 8px;';
+        
+        if (options.message_type === 'image') {
+          const img = document.createElement('img');
+          img.src = options.file_url;
+          img.alt = options.file_name || 'Image';
+          img.style.cssText = `
+            max-width: 100%;
+            max-height: 200px;
+            border-radius: 8px;
+            cursor: pointer;
+            object-fit: cover;
+          `;
+          img.addEventListener('click', () => {
+            window.open(options.file_url, '_blank');
+          });
+          fileContainer.appendChild(img);
+        } else {
+          const fileLink = document.createElement('a');
+          fileLink.href = options.file_url;
+          fileLink.target = '_blank';
+          fileLink.style.cssText = `
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: ${type === 'user' ? 'rgba(255,255,255,0.2)' : '#e0e0e0'};
+            border-radius: 8px;
+            text-decoration: none;
+            color: ${type === 'user' ? 'white' : '#333'};
+            font-size: 12px;
+          `;
+          fileLink.innerHTML = `
+            <span>📎</span>
+            <span>${options.file_name || 'File'}</span>
+            ${options.file_size ? `<span style="opacity: 0.7;">(${(options.file_size / 1024).toFixed(1)} KB)</span>` : ''}
+          `;
+          fileContainer.appendChild(fileLink);
+        }
+        
+        bubble.appendChild(fileContainer);
+      } else {
+        bubble.innerHTML = content;
+      }
 
       // Assemble message
       contentContainer.appendChild(label);
@@ -1634,47 +2048,107 @@
   }
 
   // Handle file attachment
-  function handleFileAttachment() {
+  async function handleFileAttachment() {
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = 'image/*,application/pdf,.doc,.docx,.txt';
+    fileInput.accept = 'image/*,application/pdf,.doc,.docx,.txt,.xls,.xlsx';
     fileInput.style.display = 'none';
     
-    fileInput.addEventListener('change', (e) => {
+    fileInput.addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (file) {
-        // In a real implementation, you'd upload the file to the server
-        addMessage(`📎 ${file.name}`, 'user');
-        console.log('File selected:', file.name);
+        // Validate file size (10MB limit)
+        const maxSize = 10 * 1024 * 1024;
+        if (file.size > maxSize) {
+          addMessage('File size exceeds 10MB limit. Please choose a smaller file.', 'system');
+          return;
+        }
+
+        // Check if visitor ID is available
+        const currentVisitorId = visitorId || CONFIG.visitorId;
+        if (!currentVisitorId || !CONFIG.tenantId) {
+          addMessage('Error: Unable to upload file. Please refresh the page.', 'system');
+          console.error('Visitor ID or Tenant ID not available for file upload:', {
+            visitorId: currentVisitorId,
+            tenantId: CONFIG.tenantId
+          });
+          return;
+        }
+
+        // Show uploading message
+        const uploadMessageId = 'upload_' + Date.now();
+        addMessage(`📤 Uploading ${file.name}...`, 'user', { id: uploadMessageId });
+
+        try {
+          // Create FormData for file upload
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('visitorId', currentVisitorId);
+          formData.append('tenantId', CONFIG.tenantId);
+
+          console.log('📤 Uploading file to R2:', {
+            fileName: file.name,
+            size: file.size,
+            type: file.type,
+            visitorId: currentVisitorId,
+            tenantId: CONFIG.tenantId,
+            apiUrl: CONFIG.apiUrl
+          });
+
+          // Upload file to R2
+          const uploadResponse = await fetch(CONFIG.apiUrl + '/widget/visitor/upload', {
+            method: 'POST',
+            body: formData
+          });
+
+          const uploadData = await uploadResponse.json();
+
+          if (!uploadData.success) {
+            throw new Error(uploadData.message || 'Upload failed');
+          }
+
+          console.log('✅ File uploaded successfully:', uploadData.data);
+
+          // Remove uploading message
+          const messageContainer = document.querySelector('.nxchat-messages');
+          if (messageContainer) {
+            const uploadMsg = messageContainer.querySelector(`[data-message-id="${uploadMessageId}"]`);
+            if (uploadMsg) {
+              uploadMsg.remove();
+            }
+          }
+
+          // Send message with file attachment
+          const messageContent = uploadData.data.message_type === 'image' ? '' : `📎 ${file.name}`;
+          
+          await sendMessageWithFile(
+            messageContent,
+            uploadData.data.url,
+            uploadData.data.filename,
+            uploadData.data.size,
+            uploadData.data.message_type
+          );
+
+        } catch (error) {
+          console.error('❌ File upload error:', error);
+          
+          // Remove uploading message
+          const messageContainer = document.querySelector('.nxchat-messages');
+          if (messageContainer) {
+            const uploadMsg = messageContainer.querySelector(`[data-message-id="${uploadMessageId}"]`);
+            if (uploadMsg) {
+              uploadMsg.remove();
+            }
+          }
+          
+          addMessage(`❌ Failed to upload file: ${error.message}`, 'system');
+        }
       }
     });
     
     document.body.appendChild(fileInput);
     fileInput.click();
     document.body.removeChild(fileInput);
-  }
-
-  // Toggle favorite
-  function toggleFavorite() {
-    const isFavorited = starButton.dataset.favorited === 'true';
-    
-    if (isFavorited) {
-      starButton.innerHTML = `
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/>
-        </svg>
-      `;
-      starButton.dataset.favorited = 'false';
-      starButton.style.color = '#666';
-    } else {
-      starButton.innerHTML = `
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2">
-          <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/>
-        </svg>
-      `;
-      starButton.dataset.favorited = 'true';
-      starButton.style.color = '#ffc107';
-    }
   }
 
   // Show action button
@@ -1770,8 +2244,27 @@
       dateDiv.innerHTML = `<span>${dateStr}</span>`;
       messageContainer.appendChild(dateDiv);
       
-      // Add welcome message only for new chats
+      // Add welcome message for new chats
+      if (CONFIG.features.aiEnabled) {
+        // If AI is enabled, show AI welcome message
+        if (CONFIG.settings && CONFIG.settings.ai_welcome_message && CONFIG.settings.ai_welcome_message.trim()) {
+          addMessage(CONFIG.settings.ai_welcome_message.trim(), 'bot');
+        } else {
+          // Fallback to default AI message if no custom welcome message is set
       addMessage('Hello! I\'m your AI assistant. I can help answer questions about our products and services. What would you like to know?', 'bot');
+        }
+      } else {
+        // If AI is not enabled, show regular welcome message from Behavior settings
+        // This is the "Welcome Message" field in the Behavior tab of Brand Settings
+        const welcomeMsg = CONFIG.settings?.welcome_message?.trim() || CONFIG.theme.welcomeMessage?.trim();
+        if (welcomeMsg) {
+          console.log('Showing welcome message (AI disabled):', welcomeMsg);
+          addMessage(welcomeMsg, 'bot');
+        } else {
+          // Final fallback if no welcome message is configured
+          addMessage('Hello! How can we help you today?', 'bot');
+        }
+      }
     }
     
     // Ensure scroll to bottom after content is loaded
@@ -1799,19 +2292,50 @@
       }
     });
 
-    // Track typing status
+    // Track typing status and emit live typing preview
+    let typingContentTimeout = null;
+    let lastEmittedContent = ''; // Track last emitted content to avoid unnecessary emissions
+    
     inputField.addEventListener('input', () => {
+      const inputValue = inputField.value;
       trackTyping(true);
       
-      // Clear existing timeout
+      // Always emit the current content while typing (ensures continuous visibility)
+      // Only emit if content has actually changed (avoids unnecessary emissions)
+      if (socket && socket.connected && visitorId && inputValue !== undefined) {
+        if (inputValue !== lastEmittedContent) {
+          lastEmittedContent = inputValue;
+          console.log('📤 Emitting visitor:typing-content:', { visitorId, contentLength: inputValue.length });
+          socket.emit('visitor:typing-content', {
+            visitorId: visitorId,
+            content: inputValue,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } else {
+        console.warn('⚠️ Cannot emit typing content - socket:', !!socket, 'connected:', socket?.connected, 'visitorId:', visitorId);
+      }
+      
+      // Clear existing timeout - we don't want to clear the preview while actively typing
+      // Only clear after a longer pause (30 seconds) to ensure continuous visibility
       if (typingTimeout) {
         clearTimeout(typingTimeout);
       }
       
-      // Set timeout to stop typing after 2 seconds of inactivity
+      // Set timeout to stop typing after 30 seconds of inactivity (longer for better UX)
       typingTimeout = setTimeout(() => {
         trackTyping(false);
-      }, 2000);
+        // Only clear typing preview after a longer pause to ensure it stays visible during active typing
+        if (socket && socket.connected && visitorId) {
+          console.log('📤 Clearing typing content after inactivity for visitor:', visitorId);
+          lastEmittedContent = ''; // Reset tracked content
+          socket.emit('visitor:typing-content', {
+            visitorId: visitorId,
+            content: '',
+            timestamp: new Date().toISOString()
+          });
+        }
+      }, 30000); // Increased to 30 seconds to keep preview visible longer
     });
     
     // Tab buttons
@@ -1821,6 +2345,26 @@
         switchTab(tab.dataset.tab);
       });
     });
+  }
+
+  // Hide widget completely (for banned IPs)
+  function hideWidgetCompletely() {
+    if (widgetContainer) {
+      widgetContainer.style.display = 'none';
+      widgetContainer.remove();
+    }
+    if (toggleButton) {
+      toggleButton.style.display = 'none';
+      toggleButton.remove();
+    }
+    // Disconnect socket if connected
+    if (socket && socket.connected) {
+      socket.disconnect();
+    }
+    // Clear any intervals
+    if (typingTimeout) {
+      clearTimeout(typingTimeout);
+    }
   }
 
   // Update toggle button appearance
@@ -1919,6 +2463,85 @@
     updateToggleButton();
   }
 
+  // Ensure input area is visible and properly laid out
+  function ensureInputAreaVisible() {
+    const inputArea = chatContainer ? chatContainer.querySelector('.nxchat-input-area') : null;
+    if (inputArea) {
+      inputArea.style.display = '';
+      inputArea.style.visibility = 'visible';
+    }
+    
+    // Ensure input row is properly displayed
+    if (inputField && inputField.parentNode) {
+      const inputRow = inputField.parentNode;
+      if (inputRow && inputRow.style) {
+        inputRow.style.display = 'flex';
+        inputRow.style.visibility = 'visible';
+      }
+    }
+  }
+
+  // Reset chat state for a new chat after ending previous chat
+  function resetChatStateForNewChat() {
+    console.log('Resetting chat state for new chat - re-enabling AI');
+    
+    // Reset chat state
+    agentJoined = false;
+    aiDisabled = false;
+    chatSessionActive = false;
+    hasOnlineAgents = false;
+    
+    // Find and properly restore the input area
+    const inputArea = chatContainer ? chatContainer.querySelector('.nxchat-input-area') : null;
+    if (inputArea) {
+      // Ensure input area is visible and properly displayed
+      inputArea.style.display = '';
+      inputArea.style.visibility = 'visible';
+    }
+    
+    // Restore input row (the flex container for input and send button)
+    if (inputField && inputField.parentNode) {
+      const inputRow = inputField.parentNode;
+      if (inputRow) {
+        inputRow.style.display = 'flex';
+        inputRow.style.visibility = 'visible';
+      }
+    }
+    
+    // Re-enable input field and send button
+    if (inputField) {
+      inputField.disabled = false;
+      inputField.style.display = '';
+      inputField.style.visibility = 'visible';
+    }
+    if (sendButton) {
+      sendButton.disabled = false;
+      sendButton.style.display = '';
+      sendButton.style.visibility = 'visible';
+    }
+    
+    // Re-check agent availability
+    checkAgentAvailability().then(() => {
+      // If AI is enabled, update UI to show AI is available
+      if (CONFIG.features.aiEnabled && !aiDisabled) {
+        updateChatHeader('AI Assistant');
+        console.log('AI chat re-enabled after chat ended');
+      } else {
+        updateChatHeader('Chat');
+      }
+      
+      // Hide offline form if it's showing
+      const offlineForm = document.getElementById('nxchat-offline-form');
+      if (offlineForm) {
+        offlineForm.remove();
+      }
+      
+      // Ensure input area is visible after all operations
+      if (inputArea) {
+        inputArea.style.display = '';
+      }
+    });
+  }
 
   // End chat function
   function endChat() {
@@ -1927,38 +2550,452 @@
     // Add end chat message
     addMessage('Chat ended by visitor', 'system');
     
-    // Send end chat request to backend
-    fetch('/widget/visitor/end-chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        visitorId: visitorId,
-        tenantId: CONFIG.tenantId
-      })
-    })
-    .then(response => response.json())
-    .then(data => {
-      if (data.success) {
-        console.log('Chat ended successfully');
-        // Reset states
-        agentJoined = false;
-        aiDisabled = false;
-        chatSessionActive = false;
-        agentStatusChecked = true;
-        
-        // Clear timeout since chat ended
-        clearAgentResponseTimeout();
-        
-        // Update UI
-        updateChatHeader('AI Assistant');
-      } else {
-        console.error('Failed to end chat:', data.message);
+    // Show rating form immediately (before sending request to backend)
+    showRatingForm();
+    
+    // Note: The actual chat ending will be handled by the rating form submission
+    // AI will be re-enabled in the rating form handlers after chat ends
+  }
+
+  // Show offline form when agents are unavailable
+  function showOfflineForm() {
+    console.log('showOfflineForm called');
+    
+    // Remove existing offline form if any
+    const existingForm = document.getElementById('nxchat-offline-form');
+    if (existingForm) {
+      existingForm.remove();
+    }
+    
+    // Hide input area when showing offline form
+    if (inputField && inputField.parentNode) {
+      inputField.parentNode.style.display = 'none';
+    }
+
+    // Create offline form
+    const offlineForm = document.createElement('div');
+    offlineForm.id = 'nxchat-offline-form';
+    offlineForm.style.cssText = `
+      margin-top: 16px;
+      padding: 20px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      position: relative;
+      z-index: 2;
+      pointer-events: auto;
+    `;
+
+    offlineForm.innerHTML = `
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h3 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: #333;">Leave us a message</h3>
+        <p style="margin: 0; font-size: 14px; color: #666;">All agents are currently offline. We'll get back to you soon!</p>
+      </div>
+      
+      <form id="offline-form-submit" style="display: flex; flex-direction: column; gap: 12px;">
+        <!-- Name Field -->
+        <div>
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 500; color: #333;">Name *</label>
+          <input type="text" id="offline-form-name" required placeholder="Your name" style="
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            box-sizing: border-box;
+          ">
+        </div>
+
+        <!-- Email Field -->
+        <div>
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 500; color: #333;">Email *</label>
+          <input type="email" id="offline-form-email" required placeholder="your@email.com" style="
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            box-sizing: border-box;
+          ">
+        </div>
+
+        <!-- Phone Field -->
+        <div>
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 500; color: #333;">Phone Number</label>
+          <input type="tel" id="offline-form-phone" placeholder="+1 234 567 8900" style="
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            box-sizing: border-box;
+          ">
+        </div>
+
+        <!-- Message Field -->
+        <div>
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 500; color: #333;">Message *</label>
+          <textarea id="offline-form-message" required placeholder="How can we help you?" style="
+            width: 100%;
+            min-height: 100px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            outline: none;
+            box-sizing: border-box;
+          "></textarea>
+        </div>
+
+        <!-- Submit Button -->
+        <button type="submit" id="offline-form-submit-btn" style="
+          width: 100%;
+          padding: 12px;
+          background-color: ${CONFIG.theme.primaryColor};
+          color: white;
+          border: none;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: opacity 0.2s;
+          margin-top: 8px;
+        ">Submit</button>
+      </form>
+    `;
+
+    // Add to message container
+    messageContainer.appendChild(offlineForm);
+
+    // Auto-scroll to show the form
+    setTimeout(() => {
+      messageContainer.scrollTop = messageContainer.scrollHeight;
+    }, 100);
+
+    // Handle form submission
+    const form = document.getElementById('offline-form-submit');
+    const submitBtn = document.getElementById('offline-form-submit-btn');
+    
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      const name = document.getElementById('offline-form-name').value.trim();
+      const email = document.getElementById('offline-form-email').value.trim();
+      const phone = document.getElementById('offline-form-phone').value.trim();
+      const message = document.getElementById('offline-form-message').value.trim();
+
+      if (!name || !email || !message) {
+        alert('Please fill in all required fields (Name, Email, and Message).');
+        return;
       }
-    })
-    .catch(error => {
-      console.error('Error ending chat:', error);
+
+      // Disable submit button
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Submitting...';
+      submitBtn.style.opacity = '0.6';
+
+      try {
+        console.log('Submitting offline form:', { visitorId, tenantId: CONFIG.tenantId, name, email });
+        const response = await fetch(`${CONFIG.apiUrl}/widget/visitor/create-ticket`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            visitorId: visitorId,
+            tenantId: CONFIG.tenantId,
+            name: name,
+            email: email,
+            phone: phone,
+            message: message
+          })
+        });
+
+        console.log('Response status:', response.status, response.statusText);
+        const data = await response.json();
+        console.log('Response data:', data);
+
+        if (data.success) {
+          // Show success message
+          addMessage('Thank you for your message! We\'ve received it and will get back to you soon.', 'system');
+          
+          // Remove form
+          hideOfflineForm();
+          
+          // Show success notification
+          submitBtn.textContent = 'Submitted! ✓';
+          submitBtn.style.background = '#4caf50';
+          
+          setTimeout(() => {
+            offlineForm.remove();
+          }, 2000);
+        } else {
+          // Show error message with details
+          const errorMsg = data.error || data.message || 'Failed to submit your message. Please try again.';
+          console.error('Form submission failed:', data);
+          alert(errorMsg + (data.details ? '\n\nCheck console for details.' : ''));
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Submit';
+          submitBtn.style.opacity = '1';
+        }
+      } catch (error) {
+        console.error('Error submitting offline form:', error);
+        alert('An error occurred. Please check the console and backend logs for details.');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Submit';
+        submitBtn.style.opacity = '1';
+      }
+    });
+  }
+
+  // Hide offline form
+  function hideOfflineForm() {
+    const existingForm = document.getElementById('nxchat-offline-form');
+    if (existingForm) {
+      existingForm.remove();
+    }
+    
+    // Show input area again
+    if (inputField && inputField.parentNode) {
+      inputField.parentNode.style.display = 'flex';
+    }
+  }
+
+  // Show rating form after chat ends
+  function showRatingForm() {
+    console.log('showRatingForm called');
+    
+    // Remove existing rating form if any
+    const existingForm = document.getElementById('nxchat-rating-form');
+    if (existingForm) {
+      existingForm.remove();
+    }
+    
+    // Ensure input area is visible - don't hide it when showing rating form
+    // This prevents layout from breaking
+    ensureInputAreaVisible();
+
+    // Create rating form
+    const ratingForm = document.createElement('div');
+    ratingForm.id = 'nxchat-rating-form';
+    ratingForm.style.cssText = `
+      margin-top: 16px;
+      padding: 20px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      position: relative;
+      z-index: 2;
+      pointer-events: auto;
+    `;
+
+    ratingForm.innerHTML = `
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h3 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: #333;">How was your chat experience?</h3>
+        <p style="margin: 0; font-size: 14px; color: #666;">Your feedback helps us improve</p>
+      </div>
+      
+      <!-- Star Rating -->
+      <div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; pointer-events: auto;">
+        ${[1, 2, 3, 4, 5].map(star => `
+          <button type="button" class="rating-star" data-rating="${star}" style="
+            background: none;
+            border: none;
+            font-size: 32px;
+            cursor: pointer;
+            color: #ddd;
+            transition: color 0.2s;
+            pointer-events: auto;
+          ">★</button>
+        `).join('')}
+      </div>
+
+      <!-- Feedback Textarea -->
+      <textarea id="rating-feedback" placeholder="Tell us more about your experience (optional)" style="
+        width: 100%;
+        min-height: 80px;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        font-size: 14px;
+        font-family: inherit;
+        resize: vertical;
+        outline: none;
+        box-sizing: border-box;
+      "></textarea>
+
+      <!-- Submit and Skip Buttons -->
+      <div style="display: flex; gap: 8px; margin-top: 16px;">
+        <button id="skip-rating" style="
+          flex: 1;
+          padding: 12px;
+          background-color: #f0f0f0;
+          color: #666;
+          border: none;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: opacity 0.2s;
+        ">Skip</button>
+        <button id="submit-rating" style="
+          flex: 1;
+          padding: 12px;
+          background-color: ${CONFIG.theme.primaryColor};
+          color: white;
+          border: none;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: opacity 0.2s;
+        ">Submit Feedback</button>
+      </div>
+    `;
+
+    // Add to message container
+    messageContainer.appendChild(ratingForm);
+
+    // Auto-scroll to show the rating form
+    setTimeout(() => {
+      messageContainer.scrollTop = messageContainer.scrollHeight;
+    }, 100);
+
+    // Handle star rating clicks
+    let selectedRating = 0;
+    const stars = ratingForm.querySelectorAll('.rating-star');
+    
+    stars.forEach((star, index) => {
+      star.addEventListener('mouseover', function() {
+        highlightStars(index + 1, '#ffc107');
+      });
+      
+      star.addEventListener('mouseout', function() {
+        highlightStars(selectedRating, '#dddddd');
+      });
+      
+      const select = () => {
+        selectedRating = index + 1;
+        highlightStars(selectedRating, '#ffc107');
+      };
+      star.addEventListener('click', select);
+      star.addEventListener('touchstart', (e) => { e.preventDefault(); select(); });
+    });
+
+    function highlightStars(count, color) {
+      stars.forEach((star, index) => {
+        if (index < count) {
+          star.style.color = color;
+        } else {
+          star.style.color = '#dddddd';
+        }
+      });
+    }
+
+    // Handle skip button click
+    document.getElementById('skip-rating').addEventListener('click', function() {
+      // End chat without rating
+      fetch(`${CONFIG.apiUrl}/widget/visitor/end-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          visitorId: visitorId,
+          tenantId: CONFIG.tenantId
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          // Remove rating form first
+          ratingForm.remove();
+          // Ensure input area layout is preserved
+          ensureInputAreaVisible();
+          // Re-enable AI for next chat
+          resetChatStateForNewChat();
+        }
+      })
+      .catch(error => {
+        console.error('Error ending chat:', error);
+        // Remove rating form even on error
+        ratingForm.remove();
+        // Ensure input area layout is preserved
+        ensureInputAreaVisible();
+        // Re-enable AI even on error
+        resetChatStateForNewChat();
+      });
+    });
+
+    // Handle form submission
+    document.getElementById('submit-rating').addEventListener('click', function() {
+      const feedback = document.getElementById('rating-feedback').value;
+      
+      if (selectedRating === 0) {
+        alert('Please select a rating');
+        return;
+      }
+
+      // Disable submit button
+      this.disabled = true;
+      this.style.opacity = '0.5';
+      this.textContent = 'Submitting...';
+
+      // Submit rating
+      fetch(`${CONFIG.apiUrl}/widget/visitor/end-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          visitorId: visitorId,
+          tenantId: CONFIG.tenantId,
+          rating: selectedRating,
+          feedback: feedback
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          // Show thank you message
+          ratingForm.innerHTML = `
+            <div style="text-align: center; padding: 20px;">
+              <div style="font-size: 48px; margin-bottom: 16px;">🙏</div>
+              <h3 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: #333;">Thank you for your feedback!</h3>
+              <p style="margin: 0; font-size: 14px; color: #666;">We appreciate your time</p>
+            </div>
+          `;
+          
+          // Re-enable AI for next chat
+          resetChatStateForNewChat();
+          
+          // Remove form after 3 seconds and ensure input area is visible
+          setTimeout(() => {
+            ratingForm.remove();
+            ensureInputAreaVisible();
+          }, 3000);
+        } else {
+          alert('Failed to submit feedback. Please try again.');
+          this.disabled = false;
+          this.style.opacity = '1';
+          this.textContent = 'Submit Feedback';
+        }
+      })
+      .catch(error => {
+        console.error('Error submitting rating:', error);
+        alert('Failed to submit feedback. Please try again.');
+        this.disabled = false;
+        this.style.opacity = '1';
+        this.textContent = 'Submit Feedback';
+      });
     });
   }
 
@@ -2022,14 +3059,15 @@
         display: flex;
         align-items: center;
         gap: 12px;
-        padding: 12px 16px;
+        padding: 6px 16px;
         cursor: pointer;
         transition: background-color 0.2s ease;
         color: #333;
         font-size: 14px;
+        font-weight: 600;
       `;
       menuItem.innerHTML = `
-        <span style="color: #666;">${option.icon}</span>
+        <span style="color: #000;">${option.icon}</span>
         <span>${option.text}</span>
       `;
       
@@ -2098,7 +3136,7 @@
     messages.forEach((message, index) => {
       const timestamp = new Date(message.timestamp).toLocaleString();
       const sender = message.type === 'user' ? 'Visitor' : 
-                    message.type === 'bot' ? 'AI Assistant' : 
+                    message.type === 'bot' ? (CONFIG.brand.name || CONFIG.ai.agentName || 'Assistant') : 
                     message.type === 'system' ? 'System' : 'Agent';
       receiptContent += `[${timestamp}] ${sender}: ${message.content}\n`;
     });
@@ -2173,8 +3211,106 @@
     }
   }
 
+  // Send message with file attachment
+  async function sendMessageWithFile(message, fileUrl, fileName, fileSize, messageType) {
+    const currentVisitorId = visitorId || CONFIG.visitorId;
+    if (!currentVisitorId || !CONFIG.tenantId) {
+      console.error('Visitor ID or Tenant ID not available, cannot send message');
+      addMessage('Error: Unable to send message. Please refresh the page.', 'system');
+      return;
+    }
+
+    const messageData = {
+      visitorId: currentVisitorId,
+      tenantId: CONFIG.tenantId,
+      message: message,
+      sender: 'visitor',
+      file_url: fileUrl,
+      file_name: fileName,
+      file_size: fileSize,
+      message_type: messageType
+    };
+
+    try {
+      console.log('Sending visitor message with file to backend:', messageData);
+      
+      const response = await fetch(CONFIG.apiUrl + '/widget/visitor/message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(messageData)
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        console.log('Message with file sent successfully:', data);
+        
+        // Add message to local display
+        const messageObj = {
+          id: data.messageId || Date.now().toString(),
+          content: message || `📎 ${fileName}`,
+          type: 'user',
+          timestamp: new Date().toISOString(),
+          file_url: fileUrl,
+          file_name: fileName,
+          file_size: fileSize,
+          message_type: messageType
+        };
+        
+        addMessage(messageObj.content, 'user', {
+          id: messageObj.id,
+          file_url: fileUrl,
+          file_name: fileName,
+          file_size: fileSize,
+          message_type: messageType
+        });
+        
+        // Clear input
+        if (inputField) {
+          inputField.value = '';
+        }
+        
+        // Emit socket event for real-time updates
+        if (socket && socket.connected) {
+          const currentVisitorId = visitorId || CONFIG.visitorId;
+          socket.emit('visitor:message', {
+            visitorId: currentVisitorId,
+            tenantId: CONFIG.tenantId,
+            message: message,
+            messageId: data.messageId,
+            file_url: fileUrl,
+            file_name: fileName,
+            file_size: fileSize,
+            message_type: messageType
+          });
+        }
+      } else {
+        console.error('Failed to send message:', data.message);
+        addMessage('Failed to send message. Please try again.', 'system');
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      addMessage('Error sending message. Please try again.', 'system');
+    }
+  }
+
   // Send message
   async function sendMessage() {
+    // Clear typing preview when message is sent
+    if (socket && socket.connected && visitorId) {
+      console.log('📤 Clearing typing content (message sent) for visitor:', visitorId);
+      // Reset tracked content
+      if (typeof lastEmittedContent !== 'undefined') {
+        lastEmittedContent = '';
+      }
+      socket.emit('visitor:typing-content', {
+        visitorId: visitorId,
+        content: '',
+        timestamp: new Date().toISOString()
+      });
+    }
     const message = inputField.value.trim();
     if (!message) return;
     
@@ -2261,6 +3397,13 @@
 
   // Handle AI response with transfer capability
   async function handleAIResponse(message) {
+    // Double-check that AI is enabled before proceeding
+    if (!CONFIG.features.aiEnabled) {
+      console.log('AI is disabled in widget settings, skipping AI response');
+      addMessage('Thank you for your message. Our team will get back to you as soon as possible.', 'system');
+      return;
+    }
+
     // Show typing indicator
     const typingIndicator = document.createElement('div');
     typingIndicator.className = 'nxchat-typing-indicator';
@@ -2274,7 +3417,7 @@
     `;
     typingIndicator.innerHTML = `
       <div style="width: 24px; height: 24px; border-radius: 50%; background: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 5px;">💬</div>
-      <div>${CONFIG.ai.agentName} is typing...</div>
+      <div>${CONFIG.brand.name || CONFIG.ai.agentName || 'Assistant'} is typing...</div>
     `;
     messageContainer.appendChild(typingIndicator);
     messageContainer.scrollTop = messageContainer.scrollHeight;
@@ -2310,7 +3453,16 @@
         // Update visitor message count
         updateVisitorMessageCount();
       } else {
+        // Handle different error cases
+        if (data.message && (data.message.includes('not available in your current plan') || 
+            data.message.includes('not enabled for this tenant'))) {
+          // AI is disabled or not available - show appropriate message
+          addMessage('Thank you for your message. Our team will get back to you as soon as possible.', 'system');
+          // Update CONFIG to reflect disabled state
+          CONFIG.features.aiEnabled = false;
+      } else {
         addMessage('Sorry, I encountered an error. Please try again or contact support.', 'bot');
+        }
         console.error('AI Chat Error:', data.message);
       }
     } catch (error) {
@@ -2341,8 +3493,14 @@
     try {
       console.log('Attempting to transfer to available agent...');
       
+      // Re-check agent availability before transfer
+      await checkAgentAvailability();
+      
       if (!hasOnlineAgents) {
-        addMessage('I understand you\'d like to speak with a human agent. Unfortunately, no agents are currently available. I\'ll continue helping you, and you can try again later.', 'bot');
+        // No agents available - show offline form instead
+        console.log('No agents available - showing offline form');
+        addMessage('I understand you\'d like to speak with a human agent. Unfortunately, no agents are currently available. Please fill out the form below and we\'ll get back to you.', 'bot');
+        showOfflineForm();
         return;
       }
       
@@ -2362,28 +3520,37 @@
       const data = await response.json();
       
       if (data.success) {
-        addMessage('I\'m transferring you to a human agent. Please hold on while I connect you...', 'system');
+        addMessage('I\'m transferring you to a human agent. An agent will be with you shortly. You can continue chatting with me while you wait.', 'system');
         
-        // Update states
-        agentJoined = true;
-        aiDisabled = true;
+        // Hide offline form if it was shown
+        hideOfflineForm();
+        
+        // DON'T set agentJoined = true or disable AI yet
+        // The chat is in the transfer pool - no specific agent has joined yet
+        // AI should remain enabled so visitor can continue chatting
+        agentJoined = false;
+        aiDisabled = false; // Keep AI enabled until agent actually joins
         chatSessionActive = true;
         
-        // Update UI
-        updateChatHeader('Connecting to Agent...');
+        // Update UI to show transfer in progress but AI still available
+        updateChatHeader('AI Assistant');
         
         // Clear any existing timeout
         clearAgentResponseTimeout();
         
-        // Start agent response timeout
-        startAgentResponseTimeout();
+        // Note: Don't start agent response timeout since no agent has joined yet
+        // The visitor is just waiting in the pool
       } else {
-        addMessage('I apologize, but I\'m unable to connect you with an agent right now. I\'ll continue helping you, and you can try again later.', 'bot');
+        // Agent assignment failed - show offline form
+        console.log('Agent assignment failed - showing offline form');
+        addMessage('I apologize, but I\'m unable to connect you with an agent right now. Please fill out the form below and we\'ll get back to you.', 'bot');
+        showOfflineForm();
         console.error('Failed to request agent transfer:', data.message);
       }
     } catch (error) {
       console.error('Error requesting agent transfer:', error);
-      addMessage('I apologize, but I\'m having trouble connecting you with an agent. I\'ll continue helping you, and you can try again later.', 'bot');
+      addMessage('I apologize, but I\'m having trouble connecting you with an agent. Please fill out the form below and we\'ll get back to you.', 'bot');
+      showOfflineForm();
     }
   }
 
@@ -2517,11 +3684,19 @@
       } else if (type === 'bot') {
         avatar.style.background = '#f0f0f0';
         avatar.style.color = '#666';
-        // Use AI agent logo if available, otherwise use default emoji
-        if (CONFIG.ai.agentLogo && CONFIG.ai.agentLogo.trim() !== '') {
+        
+        // Prefer brand logo; fall back to AI agent logo; then brand initial
+        const brandLogo = CONFIG.brand.logo || CONFIG.settings?.logo_url;
+        const brandName = CONFIG.brand.name || 'Support';
+        if (brandLogo && brandLogo.trim() !== '') {
+          avatar.innerHTML = `<img src="${brandLogo}" alt="${brandName}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" />`;
+        } else if (CONFIG.ai.agentLogo && CONFIG.ai.agentLogo.trim() !== '') {
           avatar.innerHTML = `<img src="${CONFIG.ai.agentLogo}" alt="${CONFIG.ai.agentName}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" />`;
         } else {
-          avatar.innerHTML = '💬';
+          const initial = brandName.charAt(0).toUpperCase();
+          avatar.style.background = CONFIG.theme.primaryColor;
+          avatar.style.color = 'white';
+          avatar.innerHTML = initial;
         }
       } else if (type === 'agent') {
         avatar.style.background = '#28a745';
@@ -2554,7 +3729,12 @@
       } else if (type === 'agent') {
         label.textContent = 'Agent';
       } else {
-        label.textContent = CONFIG.ai.agentName;
+        // If AI is disabled, use brand name; otherwise use AI agent name
+        if (!CONFIG.features.aiEnabled) {
+          label.textContent = CONFIG.brand.name || 'Support';
+        } else {
+          label.textContent = CONFIG.ai.agentName;
+        }
       }
 
       // Message bubble
@@ -2640,7 +3820,7 @@
       sessionDuration: Math.floor((Date.now() - sessionStart) / 1000),
       messagesCount: messages.length,
       isTyping: isTyping,
-      ipAddress: null, // Will be set by server
+      ipAddress: getClientIP(),
       userAgent: navigator.userAgent,
       tags: getVisitorTags(),
       // Enhanced tracking data
@@ -2655,79 +3835,102 @@
     };
   }
 
-  // Get comprehensive tracking data
+  // Cached tracking data (computed once per page load)
+  let cachedTrackingData = null;
+
+  // Efficient UTM and tracking data extraction (cached for performance)
   function getTrackingData() {
+    // Return cached data if available
+    if (cachedTrackingData) {
+      return cachedTrackingData;
+    }
+
     const url = new URL(window.location.href);
-    const searchParams = new URLSearchParams(url.search);
+    const searchParams = url.searchParams;
     const referrer = document.referrer;
     
-    // Extract UTM parameters
-    const utmSource = url.searchParams.get('utm_source') || searchParams.get('utm_source');
-    const utmMedium = url.searchParams.get('utm_medium') || searchParams.get('utm_medium');
-    const utmCampaign = url.searchParams.get('utm_campaign') || searchParams.get('utm_campaign');
-    const utmContent = url.searchParams.get('utm_content') || searchParams.get('utm_content');
-    const utmTerm = url.searchParams.get('utm_term') || searchParams.get('utm_term');
+    // Extract UTM parameters once
+    const utmParams = {
+      source: searchParams.get('utm_source'),
+      medium: searchParams.get('utm_medium'),
+      campaign: searchParams.get('utm_campaign'),
+      content: searchParams.get('utm_content'),
+      term: searchParams.get('utm_term')
+    };
     
-    // Determine source and medium
+    // Initialize tracking data
     let source = 'Direct';
     let medium = 'none';
     let keyword = null;
     let searchEngine = null;
     
-    // Check referrer
-    if (utmSource) {
-      source = utmSource;
-      medium = utmMedium || 'email';
+    // Priority: UTM parameters > Referrer analysis
+    if (utmParams.source) {
+      source = utmParams.source;
+      medium = utmParams.medium || 'email';
+      keyword = utmParams.term || null;
     } else if (referrer) {
       try {
         const refUrl = new URL(referrer);
         const hostname = refUrl.hostname.toLowerCase();
+        const refSearchParams = refUrl.searchParams;
         
-        // Check if it's a search engine
-        if (hostname.includes('google.')) {
-          source = 'Google';
-          medium = 'organic';
-          searchEngine = 'Google';
-          keyword = extractKeywordFromGoogleUrl(refUrl);
-        } else if (hostname.includes('bing.')) {
-          source = 'Bing';
-          medium = 'organic';
-          searchEngine = 'Bing';
-          keyword = extractKeywordFromBingUrl(refUrl);
-        } else if (hostname.includes('yahoo.')) {
-          source = 'Yahoo';
-          medium = 'organic';
-          searchEngine = 'Yahoo';
-          keyword = refUrl.searchParams.get('p');
-        } else if (hostname.includes('duckduckgo.')) {
-          source = 'DuckDuckGo';
-          medium = 'organic';
-          searchEngine = 'DuckDuckGo';
-          keyword = refUrl.searchParams.get('q');
-        } else if (hostname.includes('baidu.')) {
-          source = 'Baidu';
-          medium = 'organic';
-          searchEngine = 'Baidu';
-          keyword = refUrl.searchParams.get('wd');
-        } else if (hostname.includes('yandex.')) {
-          source = 'Yandex';
-          medium = 'organic';
-          searchEngine = 'Yandex';
-          keyword = refUrl.searchParams.get('text');
-        } else if (hostname.includes('facebook.')) {
-          source = 'Facebook';
-          medium = 'social';
-        } else if (hostname.includes('twitter.') || hostname.includes('x.com')) {
-          source = 'Twitter';
-          medium = 'social';
-        } else if (hostname.includes('linkedin.')) {
-          source = 'LinkedIn';
-          medium = 'social';
-        } else if (hostname.includes('instagram.')) {
-          source = 'Instagram';
-          medium = 'social';
-        } else {
-          source = hostname;
+        // Search engine detection (optimized with early returns)
+        const searchEngines = {
+          'google.': { source: 'Google', param: 'q', func: null },
+          'bing.': { source: 'Bing', param: 'q', func: null },
+          'yahoo.': { source: 'Yahoo', param: 'p', func: null },
+          'duckduckgo.': { source: 'DuckDuckGo', param: 'q', func: null },
+          'baidu.': { source: 'Baidu', param: 'wd', func: null },
+          'yandex.': { source: 'Yandex', param: 'text', func: null }
+        };
+        
+        let found = false;
+        for (const [domain, config] of Object.entries(searchEngines)) {
+          if (hostname.includes(domain)) {
+            source = config.source;
+            medium = 'organic';
+            searchEngine = config.source;
+            keyword = config.func ? config.func(refUrl) : refSearchParams.get(config.param);
+            if (keyword) {
+              try {
+                keyword = decodeURIComponent(keyword);
+              } catch (e) {
+                // Keep original if decode fails
+              }
+            }
+            found = true;
+            break;
+          }
+        }
+        
+        // Social media detection
+        if (!found) {
+          const socialNetworks = {
+            'facebook.': { source: 'Facebook', medium: 'social' },
+            'twitter.': { source: 'Twitter', medium: 'social' },
+            'x.com': { source: 'Twitter', medium: 'social' },
+            'linkedin.': { source: 'LinkedIn', medium: 'social' },
+            'instagram.': { source: 'Instagram', medium: 'social' },
+            'youtube.': { source: 'YouTube', medium: 'social' },
+            'pinterest.': { source: 'Pinterest', medium: 'social' },
+            'tiktok.': { source: 'TikTok', medium: 'social' }
+          };
+          
+          for (const [domain, config] of Object.entries(socialNetworks)) {
+            if (hostname.includes(domain)) {
+              source = config.source;
+              medium = config.medium;
+              found = true;
+              break;
+            }
+          }
+        }
+        
+        // Default to referrer domain if not found
+        if (!found) {
+          source = hostname.replace('www.', '').split('.')[0];
+          source = source.charAt(0).toUpperCase() + source.slice(1);
           medium = 'referral';
         }
       } catch (e) {
@@ -2735,51 +3938,31 @@
       }
     }
     
-    // Get landing page (first page visited in session)
-    const landingPage = sessionStorage.getItem('nxchat_landing_page') || window.location.href;
-    if (!sessionStorage.getItem('nxchat_landing_page')) {
-      sessionStorage.setItem('nxchat_landing_page', window.location.href);
+    // Get landing page (first page visited in session) - cache in sessionStorage
+    let landingPage = sessionStorage.getItem('nxchat_landing_page');
+    if (!landingPage) {
+      landingPage = window.location.href;
+      sessionStorage.setItem('nxchat_landing_page', landingPage);
     }
     
-    return {
+    // Cache and return the tracking data
+    cachedTrackingData = {
       source: source,
       medium: medium,
-      campaign: utmCampaign,
-      content: utmContent,
-      term: utmTerm,
-      keyword: keyword || utmTerm,
+      campaign: utmParams.campaign,
+      content: utmParams.content,
+      term: utmParams.term,
+      keyword: keyword || utmParams.term || null,
       searchEngine: searchEngine,
       landingPage: landingPage
     };
+    
+    return cachedTrackingData;
   }
 
-  // Extract keyword from Google search URL
-  function extractKeywordFromGoogleUrl(url) {
-    // Google uses 'q' parameter for searches
-    const query = url.searchParams.get('q');
-    if (query) {
-      // Decode if necessary
-      try {
-        return decodeURIComponent(query);
-      } catch (e) {
-        return query;
-      }
-    }
-    return null;
-  }
-
-  // Extract keyword from Bing search URL
-  function extractKeywordFromBingUrl(url) {
-    // Bing uses 'q' parameter for searches
-    const query = url.searchParams.get('q');
-    if (query) {
-      try {
-        return decodeURIComponent(query);
-      } catch (e) {
-        return query;
-      }
-    }
-    return null;
+  // Clear tracking cache when needed (e.g., on navigation)
+  function clearTrackingCache() {
+    cachedTrackingData = null;
   }
 
   // Get visitor name (try to extract from various sources)
@@ -2912,19 +4095,240 @@
     }
   }
 
-  // Get client IP address (if available)
+  // Fetch IP address and geolocation in real-time
+  async function fetchIPAndLocation() {
+    if (locationFetchInProgress) {
+      console.log('Location fetch already in progress, waiting...');
+      // Wait for existing fetch to complete (max 10 seconds)
+      let waitCount = 0;
+      while (locationFetchInProgress && waitCount < 20) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        waitCount++;
+      }
+      if (visitorIP && visitorLocation.country && visitorLocation.country !== 'Unknown') {
+        return; // Location already fetched
+      }
+    }
+    
+    locationFetchInProgress = true;
+    console.log('Fetching IP and geolocation data from ip-api.com...');
+    
+    try {
+      // Primary Service: ip-api.com (free, 45 requests/minute)
+      // Using HTTPS endpoint for better security
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        // Fetch all available fields from ip-api.com
+        const response = await fetch('http://ip-api.com/json/?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query,mobile,proxy,hosting', {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.status === 'success') {
+            // Get IP address from response
+            if (data.query && !visitorIP) {
+              visitorIP = data.query;
+              console.log('IP address fetched from ip-api.com:', visitorIP);
+            }
+            
+            // Map ip-api.com response to visitor location object
+            visitorLocation.country = data.country || 'Unknown';
+            visitorLocation.city = data.city || 'Unknown';
+            visitorLocation.region = data.regionName || data.region || 'Unknown';
+            visitorLocation.timezone = data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+            visitorLocation.zip = data.zip || null;
+            visitorLocation.lat = data.lat || null;
+            visitorLocation.lon = data.lon || null;
+            visitorLocation.isp = data.isp || null;
+            visitorLocation.org = data.org || null;
+            visitorLocation.as = data.as || null;
+            visitorLocation.mobile = data.mobile || false;
+            visitorLocation.proxy = data.proxy || false;
+            visitorLocation.hosting = data.hosting || false;
+            
+            console.log('Location fetched from ip-api.com:', visitorLocation);
+            locationFetchInProgress = false;
+            
+            // Update visitor in database with fetched data
+            updateVisitorWithLocation();
+            return;
+          } else {
+            console.warn('ip-api.com returned error:', data.message || 'Unknown error');
+          }
+        }
+      } catch (error) {
+        console.warn('ip-api.com service failed, trying fallback:', error);
+      }
+      
+      // Fallback Service: ipapi.co (free, 1000 requests/day)
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const response = await fetch('https://ipapi.co/json/', {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.ip && !visitorIP) {
+            visitorIP = data.ip;
+            console.log('IP address fetched from fallback:', visitorIP);
+          }
+          
+          if (data.country_name || data.country_code) {
+            visitorLocation.country = data.country_name || data.country || 'Unknown';
+            visitorLocation.city = data.city || 'Unknown';
+            visitorLocation.region = data.region || data.region_code || 'Unknown';
+            visitorLocation.timezone = data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+            
+            console.log('Location fetched from fallback:', visitorLocation);
+            locationFetchInProgress = false;
+            
+            // Update visitor in database with fetched data
+            updateVisitorWithLocation();
+            return;
+          }
+        }
+      } catch (error) {
+        console.warn('Fallback service failed:', error);
+      }
+      
+      // Fallback: Try backend endpoint to get IP
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const response = await fetch(`${CONFIG.apiUrl}/widget/visitor/ip`, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.ip) {
+            visitorIP = data.ip;
+            console.log('IP address fetched from backend:', visitorIP);
+            updateVisitorWithLocation();
+          }
+        }
+      } catch (error) {
+        console.warn('Backend IP service failed:', error);
+      }
+      
+      // Final fallback: Use timezone only
+      visitorLocation.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      console.warn('Could not fetch complete location data, using timezone only');
+      locationFetchInProgress = false;
+      
+    } catch (error) {
+      console.error('Error fetching IP and location:', error);
+      locationFetchInProgress = false;
+    }
+  }
+
+  // Update visitor in database with fetched location data
+  async function updateVisitorWithLocation() {
+    if (!visitorId || !CONFIG.tenantId) {
+      console.log('Cannot update visitor location: missing visitorId or tenantId');
+      return;
+    }
+    
+    // Only update if we have valid location data
+    if (!visitorLocation || !visitorLocation.country || visitorLocation.country === 'Unknown') {
+      console.log('No valid location data to update, skipping...');
+      return;
+    }
+    
+    try {
+      const visitorInfo = getVisitorInfo();
+      const trackingData = getTrackingData();
+      const response = await fetch(`${CONFIG.apiUrl}/widget/visitor`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          visitorId: visitorId,
+          sessionId: sessionId || visitorInfo.sessionId,
+          tenantId: CONFIG.tenantId,
+          ipAddress: visitorIP || visitorInfo.ipAddress,
+          location: visitorLocation, // Send full location object
+          currentPage: window.location.href,
+          referrer: document.referrer || 'Direct',
+          device: visitorInfo.device,
+          userAgent: visitorInfo.userAgent,
+          // Include UTM tracking data
+          source: trackingData.source,
+          medium: trackingData.medium,
+          campaign: trackingData.campaign,
+          content: trackingData.content,
+          term: trackingData.term,
+          keyword: trackingData.keyword,
+          searchEngine: trackingData.searchEngine,
+          landingPage: trackingData.landingPage
+        })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Visitor location updated in database:', {
+          ip: visitorIP,
+          country: visitorLocation.country,
+          city: visitorLocation.city,
+          region: visitorLocation.region
+        });
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        
+        // Check if visitor is banned
+        if (response.status === 403 && errorData.banned) {
+          console.warn('Visitor IP is banned, hiding widget');
+          hideWidgetCompletely();
+          return;
+        }
+        
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.warn('Failed to update visitor location:', response.status, errorText);
+      }
+    } catch (error) {
+      console.warn('Error updating visitor location:', error);
+    }
+  }
+
+  // Get client IP address
   function getClientIP() {
-    // This would typically be provided by the server
-    return window.clientIP || 'Unknown';
+    return visitorIP || 'Unknown';
   }
 
   // Get visitor location information
   function getVisitorLocation() {
+    // Return the full location object if it has valid data
+    if (visitorLocation && visitorLocation.country && visitorLocation.country !== 'Unknown') {
+      return visitorLocation;
+    }
+    // Otherwise return minimal structure
     return {
-      country: window.visitorLocation?.country || 'Unknown',
-      city: window.visitorLocation?.city || 'Unknown',
-      region: window.visitorLocation?.region || 'Unknown',
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      country: visitorLocation?.country || 'Unknown',
+      city: visitorLocation?.city || 'Unknown',
+      region: visitorLocation?.region || 'Unknown',
+      timezone: visitorLocation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone
     };
   }
 
@@ -3188,7 +4592,7 @@
     }
   }
 
-  function initVisitorTracking() {
+  async function initVisitorTracking() {
     console.log('Initializing visitor tracking for tenant:', CONFIG.tenantId);
     
     // Check for existing visitor ID in localStorage
@@ -3208,21 +4612,24 @@
     
     console.log('Visitor tracking initialized with ID:', visitorId);
     
-    // Try to join visitor room if socket is already connected
-    ensureVisitorRoomJoined();
-    
-    // Create or update visitor in database to get consistent ID
-    createOrUpdateVisitor();
-    
     // Always generate new session ID for each page load
     // (session ID represents a single browser session)
     sessionId = generateSessionId();
     // Store session ID for this session
     localStorage.setItem(`nxchat_session_id_${CONFIG.tenantId}`, sessionId);
     console.log('Generated new session ID:', sessionId);
+    
+    // Fetch IP and location data if not already fetched - WAIT for it before creating visitor
+    if (!visitorIP || !visitorLocation.country || visitorLocation.country === 'Unknown') {
+      console.log('Fetching IP and location before creating visitor...');
+      await fetchIPAndLocation();
+    }
+    
+    // Try to join visitor room if socket is already connected
+    ensureVisitorRoomJoined();
 
-    // Create or update visitor in database
-    createOrUpdateVisitor(isReturningVisitor);
+    // Create or update visitor in database WITH location data
+    await createOrUpdateVisitor(isReturningVisitor);
 
     // Track initial page view
     trackVisitorActivity();
@@ -3293,7 +4700,16 @@
           sessionDuration: visitorInfo.sessionDuration,
           messagesCount: visitorInfo.messagesCount,
           lastActivity: visitorInfo.lastActivity,
-          isReturning: isReturningVisitor
+          isReturning: isReturningVisitor,
+          // Include UTM tracking data
+          source: visitorInfo.source,
+          medium: visitorInfo.medium,
+          campaign: visitorInfo.campaign,
+          content: visitorInfo.content,
+          term: visitorInfo.term,
+          keyword: visitorInfo.keyword,
+          searchEngine: visitorInfo.searchEngine,
+          landingPage: visitorInfo.landingPage
         })
       });
       
@@ -3312,6 +4728,15 @@
         // Try to join visitor room with the correct visitor ID
         ensureVisitorRoomJoined();
       } else {
+        const errorData = await response.json().catch(() => ({}));
+        
+        // Check if visitor is banned
+        if (response.status === 403 && errorData.banned) {
+          console.warn('Visitor IP is banned, hiding widget');
+          hideWidgetCompletely();
+          return;
+        }
+        
         console.warn('Failed to create/update visitor:', response.statusText);
       }
     } catch (error) {

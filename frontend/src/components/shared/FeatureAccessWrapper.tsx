@@ -33,7 +33,11 @@ export const FeatureAccessWrapper: React.FC<FeatureAccessWrapperProps> = ({
     );
   }
 
-  if (!hasAccess(feature as any)) {
+  // Type-safe feature access check
+  // hasAccess expects a key of FeatureAccess interface
+  type FeatureAccessKey = 'ai_enabled' | 'ai_training' | 'ai_messages_limit' | 'custom_branding' | 'grammar_checker';
+  const featureKey = feature as FeatureAccessKey;
+  if (!hasAccess(featureKey)) {
     return (
       <div className="space-y-6">
         <Card className="border-dashed">

@@ -15,17 +15,20 @@ class RedisPubSubService {
    */
   async initialize(io) {
     try {
-      if (!redis || !redis.isConnected) {
+      if (!redis || redis.status !== 'ready') {
         console.warn('Redis not connected, skipping Pub/Sub initialization');
         return null;
       }
 
       // Create Redis clients for adapter
+      // ioredis supports duplicate() for creating a new client with same config
       this.publisher = redis;
       this.subscriber = redis.duplicate();
 
-      // Connect subscriber
-      await this.subscriber.connect();
+      // For ioredis, duplicate() creates a new client that needs to be connected
+      if (this.subscriber.status !== 'ready') {
+        await this.subscriber.connect();
+      }
 
       // Create adapter for Socket.io
       io.adapter(createAdapter(this.publisher, this.subscriber));

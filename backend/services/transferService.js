@@ -58,16 +58,25 @@ const findAvailableAgent = async (tenantId, brandId) => {
   }
 };
 
-// Transfer chat from AI to agent
+// Transfer chat from AI to agent pool (no specific agent assigned)
 const transferChatToAgent = async (visitorId, tenantId, brandId) => {
   try {
-    console.log('Transferring chat to agent:', { visitorId, tenantId, brandId });
+    console.log('Transferring chat to agent pool (no specific agent):', { visitorId, tenantId, brandId });
     
-    // Find available agent
-    const agent = await findAvailableAgent(tenantId, brandId);
-    
-    if (!agent) {
-      console.log('No available agent found for transfer');
+    // Check if there are any online agents (just to verify availability)
+    const { User } = require('../models');
+    const onlineAgents = await User.findAll({
+      where: {
+        tenant_id: tenantId,
+        role: 'agent',
+        status: 'active',
+        agent_presence_status: 'online'
+      },
+      limit: 1
+    });
+
+    if (onlineAgents.length === 0) {
+      console.log('No online agents available for transfer');
       return {
         success: false,
         message: 'No available agents at the moment. Please try again later.',
@@ -75,10 +84,11 @@ const transferChatToAgent = async (visitorId, tenantId, brandId) => {
       };
     }
 
-    // Update visitor with assigned agent
+    // Update visitor status to waiting_for_agent WITHOUT assigning specific agent
+    // This makes it visible in Transfer Chats section for all online agents
     await Visitor.update(
       { 
-        assigned_agent_id: agent.id,
+        assigned_agent_id: null, // Don't assign to specific agent
         status: 'waiting_for_agent',
         last_activity: new Date()
       },
@@ -90,21 +100,16 @@ const transferChatToAgent = async (visitorId, tenantId, brandId) => {
       }
     );
 
-    console.log('Chat transferred to agent:', agent.name);
+    console.log('Chat moved to transfer pool - visible to all online agents');
     
     return {
       success: true,
-      message: 'Chat transferred successfully',
-      agent: {
-        id: agent.id,
-        name: agent.name,
-        email: agent.email,
-        avatar: agent.avatar
-      }
+      message: 'Chat transferred to agent pool',
+      agent: null // No specific agent assigned
     };
     
   } catch (error) {
-    console.error('Error transferring chat to agent:', error);
+    console.error('Error transferring chat to agent pool:', error);
     return {
       success: false,
       message: 'Failed to transfer chat. Please try again.',

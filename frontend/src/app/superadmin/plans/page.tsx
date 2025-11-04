@@ -64,26 +64,10 @@ export default function PlansPage() {
     max_departments: '',
     max_storage: '',
     max_ai_messages: '',
-    allows_calls: false,
     ai_enabled: false,
-    analytics_enabled: false,
-    // Individual feature toggles
-    audio_calls: false,
-    video_calls: false,
+    ai_training: false,
     grammar_checker: false,
-    file_sharing: false,
-    screen_sharing: false,
-    live_chat: false,
-    email_support: false,
-    phone_support: false,
-    priority_support: false,
     custom_branding: false,
-    api_access: false,
-    webhooks: false,
-    integrations: false,
-    advanced_analytics: false,
-    user_management: false,
-    role_based_access: false,
     is_active: true,
     stripe_price_id: '',
     interval: 'month',
@@ -120,28 +104,13 @@ export default function PlansPage() {
         max_departments: parseInt(formData.max_departments),
         max_storage: parseInt(formData.max_storage),
         max_ai_messages: parseInt(formData.max_ai_messages) || 0,
-        allows_calls: formData.allows_calls,
         ai_enabled: formData.ai_enabled,
-        analytics_enabled: formData.analytics_enabled,
         stripe_price_id: formData.stripe_price_id,
-        billing_interval: formData.billing_interval,
+        billing_interval: formData.interval,
         features: {
-          audio_calls: formData.audio_calls,
-          video_calls: formData.video_calls,
+          ai_training: formData.ai_training,
           grammar_checker: formData.grammar_checker,
-          file_sharing: formData.file_sharing,
-          screen_sharing: formData.screen_sharing,
-          live_chat: formData.live_chat,
-          email_support: formData.email_support,
-          phone_support: formData.phone_support,
-          priority_support: formData.priority_support,
           custom_branding: formData.custom_branding,
-          api_access: formData.api_access,
-          webhooks: formData.webhooks,
-          integrations: formData.integrations,
-          advanced_analytics: formData.advanced_analytics,
-          user_management: formData.user_management,
-          role_based_access: formData.role_based_access,
         },
       });
 
@@ -171,28 +140,13 @@ export default function PlansPage() {
         max_departments: parseInt(formData.max_departments),
         max_storage: parseInt(formData.max_storage),
         max_ai_messages: parseInt(formData.max_ai_messages) || 0,
-        allows_calls: formData.allows_calls,
         ai_enabled: formData.ai_enabled,
-        analytics_enabled: formData.analytics_enabled,
         stripe_price_id: formData.stripe_price_id,
-        billing_interval: formData.billing_interval,
+        billing_interval: formData.interval,
         features: {
-          audio_calls: formData.audio_calls,
-          video_calls: formData.video_calls,
+          ai_training: formData.ai_training,
           grammar_checker: formData.grammar_checker,
-          file_sharing: formData.file_sharing,
-          screen_sharing: formData.screen_sharing,
-          live_chat: formData.live_chat,
-          email_support: formData.email_support,
-          phone_support: formData.phone_support,
-          priority_support: formData.priority_support,
           custom_branding: formData.custom_branding,
-          api_access: formData.api_access,
-          webhooks: formData.webhooks,
-          integrations: formData.integrations,
-          advanced_analytics: formData.advanced_analytics,
-          user_management: formData.user_management,
-          role_based_access: formData.role_based_access,
         },
       });
 
@@ -238,29 +192,13 @@ export default function PlansPage() {
       max_departments: '',
       max_storage: '',
       max_ai_messages: '',
-      allows_calls: false,
       ai_enabled: false,
-      analytics_enabled: false,
-      // Individual feature toggles
-      audio_calls: false,
-      video_calls: false,
+      ai_training: false,
       grammar_checker: false,
-      file_sharing: false,
-      screen_sharing: false,
-      live_chat: false,
-      email_support: false,
-      phone_support: false,
-      priority_support: false,
       custom_branding: false,
-      api_access: false,
-      webhooks: false,
-      integrations: false,
-      advanced_analytics: false,
-      user_management: false,
-      role_based_access: false,
       is_active: true,
       stripe_price_id: '',
-      billing_interval: 'month',
+      interval: 'month',
     });
   };
 
@@ -284,29 +222,13 @@ export default function PlansPage() {
       max_departments: plan.max_departments.toString(),
       max_storage: plan.max_storage.toString(),
       max_ai_messages: plan.max_ai_messages?.toString() || '',
-      allows_calls: plan.allows_calls || false,
       ai_enabled: plan.ai_enabled || false,
-      analytics_enabled: plan.analytics_enabled || false,
-      // Individual feature toggles
-      audio_calls: featureMap.audio_calls || false,
-      video_calls: featureMap.video_calls || false,
+      ai_training: featureMap.ai_training || false,
       grammar_checker: featureMap.grammar_checker || false,
-      file_sharing: featureMap.file_sharing || false,
-      screen_sharing: featureMap.screen_sharing || false,
-      live_chat: featureMap.live_chat || false,
-      email_support: featureMap.email_support || false,
-      phone_support: featureMap.phone_support || false,
-      priority_support: featureMap.priority_support || false,
       custom_branding: featureMap.custom_branding || false,
-      api_access: featureMap.api_access || false,
-      webhooks: featureMap.webhooks || false,
-      integrations: featureMap.integrations || false,
-      advanced_analytics: featureMap.advanced_analytics || false,
-      user_management: featureMap.user_management || false,
-      role_based_access: featureMap.role_based_access || false,
       is_active: plan.is_active,
       stripe_price_id: plan.stripe_price_id || '',
-        billing_interval: plan.billing_interval || 'month',
+      interval: plan.billing_interval || 'month',
     });
     setIsEditDialogOpen(true);
   };
@@ -554,207 +476,61 @@ export default function PlansPage() {
                 </div>
               </div>
               <div className="space-y-4">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="allows_calls"
-                    checked={formData.allows_calls}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, allows_calls: checked }))}
-                  />
-                  <Label htmlFor="allows_calls">Allow Video Calls</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="ai_enabled"
-                    checked={formData.ai_enabled}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, ai_enabled: checked }))}
-                  />
-                  <Label htmlFor="ai_enabled">AI Enabled</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="analytics_enabled"
-                    checked={formData.analytics_enabled}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, analytics_enabled: checked }))}
-                  />
-                  <Label htmlFor="analytics_enabled">Analytics Enabled</Label>
-                </div>
-              </div>
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">Communication Features</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="audio_calls"
-                      checked={formData.audio_calls}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, audio_calls: checked }))}
-                    />
-                    <Label htmlFor="audio_calls">Audio Calls</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="video_calls"
-                      checked={formData.video_calls}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, video_calls: checked }))}
-                    />
-                    <Label htmlFor="video_calls">Video Calls</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="screen_sharing"
-                      checked={formData.screen_sharing}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, screen_sharing: checked }))}
-                    />
-                    <Label htmlFor="screen_sharing">Screen Sharing</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="live_chat"
-                      checked={formData.live_chat}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, live_chat: checked }))}
-                    />
-                    <Label htmlFor="live_chat">Live Chat</Label>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">AI & Automation Features</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="grammar_checker"
-                      checked={formData.grammar_checker}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, grammar_checker: checked }))}
-                    />
-                    <Label htmlFor="grammar_checker">Grammar Checker</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
+                <h3 className="text-lg font-semibold">Plan Features</h3>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="ai_enabled" className="text-base font-medium">AI Enabled</Label>
+                      <p className="text-sm text-muted-foreground">Enable AI chatbot functionality</p>
+                    </div>
                     <Switch
                       id="ai_enabled"
                       checked={formData.ai_enabled}
                       onCheckedChange={(checked) => setFormData(prev => ({ ...prev, ai_enabled: checked }))}
                     />
-                    <Label htmlFor="ai_enabled">AI Assistant</Label>
                   </div>
-                </div>
-              </div>
-              
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">File & Sharing Features</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="ai_training" className="text-base font-medium">AI Training</Label>
+                      <p className="text-sm text-muted-foreground">Allow AI training with custom documents</p>
+                    </div>
                     <Switch
-                      id="file_sharing"
-                      checked={formData.file_sharing}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, file_sharing: checked }))}
+                      id="ai_training"
+                      checked={formData.ai_training}
+                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, ai_training: checked }))}
                     />
-                    <Label htmlFor="file_sharing">File Sharing</Label>
                   </div>
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="space-y-0.5">
+                      <Label className="text-base font-medium">AI Messages Limit</Label>
+                      <p className="text-sm text-muted-foreground">Maximum AI messages allowed per billing cycle</p>
+                    </div>
+                    <div className="text-sm font-medium text-right">
+                      {formData.max_ai_messages || 0}<br/>
+                      <span className="text-xs text-muted-foreground">messages</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="custom_branding" className="text-base font-medium">Custom Branding</Label>
+                      <p className="text-sm text-muted-foreground">Allow custom branding and white-labeling</p>
+                    </div>
                     <Switch
                       id="custom_branding"
                       checked={formData.custom_branding}
                       onCheckedChange={(checked) => setFormData(prev => ({ ...prev, custom_branding: checked }))}
                     />
-                    <Label htmlFor="custom_branding">Custom Branding</Label>
                   </div>
-                </div>
-              </div>
-              
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">Support Features</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="grammar_checker" className="text-base font-medium">Grammar Checker</Label>
+                      <p className="text-sm text-muted-foreground">Enable grammar checking for messages</p>
+                    </div>
                     <Switch
-                      id="email_support"
-                      checked={formData.email_support}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, email_support: checked }))}
+                      id="grammar_checker"
+                      checked={formData.grammar_checker}
+                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, grammar_checker: checked }))}
                     />
-                    <Label htmlFor="email_support">Email Support</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="phone_support"
-                      checked={formData.phone_support}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, phone_support: checked }))}
-                    />
-                    <Label htmlFor="phone_support">Phone Support</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="priority_support"
-                      checked={formData.priority_support}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, priority_support: checked }))}
-                    />
-                    <Label htmlFor="priority_support">Priority Support</Label>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">Technical Features</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="api_access"
-                      checked={formData.api_access}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, api_access: checked }))}
-                    />
-                    <Label htmlFor="api_access">API Access</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="webhooks"
-                      checked={formData.webhooks}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, webhooks: checked }))}
-                    />
-                    <Label htmlFor="webhooks">Webhooks</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="integrations"
-                      checked={formData.integrations}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, integrations: checked }))}
-                    />
-                    <Label htmlFor="integrations">Third-party Integrations</Label>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">Analytics & Management</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="analytics_enabled"
-                      checked={formData.analytics_enabled}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, analytics_enabled: checked }))}
-                    />
-                    <Label htmlFor="analytics_enabled">Basic Analytics</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="advanced_analytics"
-                      checked={formData.advanced_analytics}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, advanced_analytics: checked }))}
-                    />
-                    <Label htmlFor="advanced_analytics">Advanced Analytics</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="user_management"
-                      checked={formData.user_management}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, user_management: checked }))}
-                    />
-                    <Label htmlFor="user_management">User Management</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="role_based_access"
-                      checked={formData.role_based_access}
-                      onCheckedChange={(checked) => setFormData(prev => ({ ...prev, role_based_access: checked }))}
-                    />
-                    <Label htmlFor="role_based_access">Role-based Access</Label>
                   </div>
                 </div>
               </div>
@@ -955,207 +731,61 @@ export default function PlansPage() {
               </div>
             </div>
             <div className="space-y-4">
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="edit-allows_calls"
-                  checked={formData.allows_calls}
-                  onCheckedChange={(checked) => setFormData(prev => ({ ...prev, allows_calls: checked }))}
-                />
-                <Label htmlFor="edit-allows_calls">Allow Video Calls</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="edit-ai_enabled"
-                  checked={formData.ai_enabled}
-                  onCheckedChange={(checked) => setFormData(prev => ({ ...prev, ai_enabled: checked }))}
-                />
-                <Label htmlFor="edit-ai_enabled">AI Enabled</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="edit-analytics_enabled"
-                  checked={formData.analytics_enabled}
-                  onCheckedChange={(checked) => setFormData(prev => ({ ...prev, analytics_enabled: checked }))}
-                />
-                <Label htmlFor="edit-analytics_enabled">Analytics Enabled</Label>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">Communication Features</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-audio_calls"
-                    checked={formData.audio_calls}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, audio_calls: checked }))}
-                  />
-                  <Label htmlFor="edit-audio_calls">Audio Calls</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-video_calls"
-                    checked={formData.video_calls}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, video_calls: checked }))}
-                  />
-                  <Label htmlFor="edit-video_calls">Video Calls</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-screen_sharing"
-                    checked={formData.screen_sharing}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, screen_sharing: checked }))}
-                  />
-                  <Label htmlFor="edit-screen_sharing">Screen Sharing</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-live_chat"
-                    checked={formData.live_chat}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, live_chat: checked }))}
-                  />
-                  <Label htmlFor="edit-live_chat">Live Chat</Label>
-                </div>
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">AI & Automation Features</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-grammar_checker"
-                    checked={formData.grammar_checker}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, grammar_checker: checked }))}
-                  />
-                  <Label htmlFor="edit-grammar_checker">Grammar Checker</Label>
-                </div>
-                <div className="flex items-center space-x-2">
+              <h3 className="text-lg font-semibold">Plan Features</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="edit-ai_enabled" className="text-base font-medium">AI Enabled</Label>
+                    <p className="text-sm text-muted-foreground">Enable AI chatbot functionality</p>
+                  </div>
                   <Switch
                     id="edit-ai_enabled"
                     checked={formData.ai_enabled}
                     onCheckedChange={(checked) => setFormData(prev => ({ ...prev, ai_enabled: checked }))}
                   />
-                  <Label htmlFor="edit-ai_enabled">AI Assistant</Label>
                 </div>
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">File & Sharing Features</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="edit-ai_training" className="text-base font-medium">AI Training</Label>
+                    <p className="text-sm text-muted-foreground">Allow AI training with custom documents</p>
+                  </div>
                   <Switch
-                    id="edit-file_sharing"
-                    checked={formData.file_sharing}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, file_sharing: checked }))}
+                    id="edit-ai_training"
+                    checked={formData.ai_training}
+                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, ai_training: checked }))}
                   />
-                  <Label htmlFor="edit-file_sharing">File Sharing</Label>
                 </div>
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="space-y-0.5">
+                    <Label className="text-base font-medium">AI Messages Limit</Label>
+                    <p className="text-sm text-muted-foreground">Maximum AI messages allowed per billing cycle</p>
+                  </div>
+                  <div className="text-sm font-medium text-right">
+                    {formData.max_ai_messages || 0}<br/>
+                    <span className="text-xs text-muted-foreground">messages</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="edit-custom_branding" className="text-base font-medium">Custom Branding</Label>
+                    <p className="text-sm text-muted-foreground">Allow custom branding and white-labeling</p>
+                  </div>
                   <Switch
                     id="edit-custom_branding"
                     checked={formData.custom_branding}
                     onCheckedChange={(checked) => setFormData(prev => ({ ...prev, custom_branding: checked }))}
                   />
-                  <Label htmlFor="edit-custom_branding">Custom Branding</Label>
                 </div>
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">Support Features</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="edit-grammar_checker" className="text-base font-medium">Grammar Checker</Label>
+                    <p className="text-sm text-muted-foreground">Enable grammar checking for messages</p>
+                  </div>
                   <Switch
-                    id="edit-email_support"
-                    checked={formData.email_support}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, email_support: checked }))}
+                    id="edit-grammar_checker"
+                    checked={formData.grammar_checker}
+                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, grammar_checker: checked }))}
                   />
-                  <Label htmlFor="edit-email_support">Email Support</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-phone_support"
-                    checked={formData.phone_support}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, phone_support: checked }))}
-                  />
-                  <Label htmlFor="edit-phone_support">Phone Support</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-priority_support"
-                    checked={formData.priority_support}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, priority_support: checked }))}
-                  />
-                  <Label htmlFor="edit-priority_support">Priority Support</Label>
-                </div>
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">Technical Features</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-api_access"
-                    checked={formData.api_access}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, api_access: checked }))}
-                  />
-                  <Label htmlFor="edit-api_access">API Access</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-webhooks"
-                    checked={formData.webhooks}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, webhooks: checked }))}
-                  />
-                  <Label htmlFor="edit-webhooks">Webhooks</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-integrations"
-                    checked={formData.integrations}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, integrations: checked }))}
-                  />
-                  <Label htmlFor="edit-integrations">Third-party Integrations</Label>
-                </div>
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">Analytics & Management</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-analytics_enabled"
-                    checked={formData.analytics_enabled}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, analytics_enabled: checked }))}
-                  />
-                  <Label htmlFor="edit-analytics_enabled">Basic Analytics</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-advanced_analytics"
-                    checked={formData.advanced_analytics}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, advanced_analytics: checked }))}
-                  />
-                  <Label htmlFor="edit-advanced_analytics">Advanced Analytics</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-user_management"
-                    checked={formData.user_management}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, user_management: checked }))}
-                  />
-                  <Label htmlFor="edit-user_management">User Management</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="edit-role_based_access"
-                    checked={formData.role_based_access}
-                    onCheckedChange={(checked) => setFormData(prev => ({ ...prev, role_based_access: checked }))}
-                  />
-                  <Label htmlFor="edit-role_based_access">Role-based Access</Label>
                 </div>
               </div>
             </div>

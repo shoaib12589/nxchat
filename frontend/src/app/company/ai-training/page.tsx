@@ -42,6 +42,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import apiClient from '@/lib/api';
+import { useFeatureAccess } from '@/hooks/useFeatureAccess';
+import { UpgradePlanMessage } from '@/components/shared/UpgradePlanMessage';
 
 interface AITrainingDoc {
   id: number;
@@ -67,6 +69,7 @@ interface TrainingStats {
 }
 
 export default function AITrainingPage() {
+  const { hasAccess, loading: featureLoading } = useFeatureAccess();
   const [documents, setDocuments] = useState<AITrainingDoc[]>([]);
   const [stats, setStats] = useState<TrainingStats | null>(null);
   const [brands, setBrands] = useState<any[]>([]);
@@ -81,12 +84,15 @@ export default function AITrainingPage() {
     brand_id: 'general',
   });
   const [submitting, setSubmitting] = useState(false);
+  const hasAITrainingAccess = hasAccess('ai_training');
 
   useEffect(() => {
-    fetchDocuments();
-    fetchStats();
-    fetchBrands();
-  }, []);
+    if (!featureLoading && hasAITrainingAccess) {
+      fetchDocuments();
+      fetchStats();
+      fetchBrands();
+    }
+  }, [featureLoading, hasAITrainingAccess]);
 
   const fetchBrands = async () => {
     try {
@@ -295,10 +301,24 @@ export default function AITrainingPage() {
     }
   };
 
-  if (loading) {
+  if (featureLoading || loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="w-8 h-8 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!hasAITrainingAccess) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">AI Training</h1>
+          <p className="text-muted-foreground">
+            Train your AI assistant with business-specific knowledge and responses
+          </p>
+        </div>
+        <UpgradePlanMessage featureName="AI Training" />
       </div>
     );
   }

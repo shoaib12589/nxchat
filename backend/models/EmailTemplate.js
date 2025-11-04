@@ -20,6 +20,8 @@ const EmailTemplate = sequelize.define('EmailTemplate', {
       'agent_invitation',
       'notification',
       'chat_assignment',
+      'ticket_created',
+      'ticket_reply',
       'custom'
     ),
     allowNull: false,

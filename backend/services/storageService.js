@@ -1,5 +1,6 @@
 const AWS = require('aws-sdk');
-const { StorageProvider } = require('../models');
+const { StorageProvider, SystemSetting } = require('../models');
+const { Op } = require('sequelize');
 
 // Configure AWS SDK
 const configureAWS = (provider) => {
@@ -28,25 +29,142 @@ const configureAWS = (provider) => {
 // Get active storage provider
 const getActiveProvider = async () => {
   try {
+    // Check for default storage provider setting
+    const defaultProviderSetting = await SystemSetting.findOne({
+      where: { setting_key: 'default_storage_provider' }
+    });
+
+    const defaultProviderName = defaultProviderSetting?.value || 'r2'; // Default to R2 if not set
+    console.log('🔍 Default storage provider setting:', defaultProviderName);
+
+    // First, try to get R2 configuration from system settings
+    const r2Settings = await SystemSetting.findAll({
+      where: {
+        setting_key: {
+          [Op.in]: [
+            'r2_access_key_id',
+            'r2_secret_access_key',
+            'r2_bucket_name',
+            'r2_endpoint',
+            'r2_region'
+          ]
+        }
+      }
+    });
+
+    // Convert settings array to object
+    const r2Config = {};
+    r2Settings.forEach(setting => {
+      r2Config[setting.setting_key] = setting.value;
+    });
+
+    console.log('🔍 R2 Configuration check:', {
+      hasAccessKey: !!r2Config.r2_access_key_id,
+      hasSecretKey: !!r2Config.r2_secret_access_key,
+      hasBucketName: !!r2Config.r2_bucket_name,
+      hasEndpoint: !!r2Config.r2_endpoint,
+      defaultProvider: defaultProviderName
+    });
+
+    // If default provider is R2 and R2 is configured in system settings, use it
+    if (defaultProviderName === 'r2' && r2Config.r2_access_key_id && r2Config.r2_secret_access_key && 
+        r2Config.r2_bucket_name && r2Config.r2_endpoint) {
+      
+      console.log('✅ Using R2 from system settings');
+      
+      // Check if R2 provider exists in database, create or update it
+      let r2Provider = await StorageProvider.findOne({
+        where: { provider_name: 'r2' }
+      });
+
+      if (r2Provider) {
+        // Update existing R2 provider with new credentials
+        console.log('📝 Updating existing R2 provider in database');
+        await r2Provider.update({
+          access_key: r2Config.r2_access_key_id,
+          secret_key: r2Config.r2_secret_access_key,
+          bucket_name: r2Config.r2_bucket_name,
+          endpoint: r2Config.r2_endpoint,
+          region: r2Config.r2_region || 'auto',
+          is_active: true
+        });
+      } else {
+        // Create new R2 provider
+        console.log('➕ Creating new R2 provider in database');
+        r2Provider = await StorageProvider.create({
+          provider_name: 'r2',
+          access_key: r2Config.r2_access_key_id,
+          secret_key: r2Config.r2_secret_access_key,
+          bucket_name: r2Config.r2_bucket_name,
+          endpoint: r2Config.r2_endpoint,
+          region: r2Config.r2_region || 'auto',
+          is_active: true,
+          is_default: true
+        });
+      }
+
+      console.log('✅ R2 provider ready:', {
+        id: r2Provider.id,
+        bucket: r2Provider.bucket_name,
+        endpoint: r2Provider.endpoint
+      });
+
+      return r2Provider;
+    }
+
+    // If default provider is set to something other than R2, or R2 not configured, use database storage provider
+    // Try to get the provider specified in default_storage_provider setting
+    if (defaultProviderName && defaultProviderName !== 'r2') {
+      console.log('🔍 Looking for provider:', defaultProviderName);
+      const provider = await StorageProvider.findOne({
+        where: { 
+          provider_name: defaultProviderName,
+          is_active: true 
+        }
+      });
+
+      if (provider) {
+        console.log('✅ Using provider from database:', provider.provider_name);
+        return provider;
+      } else {
+        console.warn('⚠️ Provider not found in database:', defaultProviderName);
+      }
+    }
+
+    // Fallback to any active storage provider
+    console.log('🔍 Falling back to any active storage provider');
     const provider = await StorageProvider.findOne({
-      where: { is_active: true }
+      where: { is_active: true },
+      order: [['is_default', 'DESC'], ['created_at', 'DESC']]
     });
 
     if (!provider) {
-      throw new Error('No active storage provider found');
+      console.error('❌ No active storage provider found');
+      throw new Error('No active storage provider found. Please configure R2 in Superadmin Settings or set up a storage provider in the database.');
     }
 
+    console.log('✅ Using fallback provider:', provider.provider_name);
     return provider;
   } catch (error) {
-    console.error('Error getting active storage provider:', error);
+    console.error('❌ Error getting active storage provider:', error);
+    console.error('❌ Error stack:', error.stack);
     throw error;
   }
 };
 
 // Upload file to storage
 const uploadFile = async (key, buffer, contentType) => {
+  let provider = null;
   try {
-    const provider = await getActiveProvider();
+    console.log('📤 Starting file upload:', { key, contentType, size: buffer.length });
+    
+    provider = await getActiveProvider();
+    console.log('✅ Using storage provider:', {
+      name: provider.provider_name,
+      bucket: provider.bucket_name,
+      endpoint: provider.endpoint
+    });
+    
     const s3 = configureAWS(provider);
 
     const params = {
@@ -57,24 +175,72 @@ const uploadFile = async (key, buffer, contentType) => {
       ACL: 'public-read'
     };
 
+    console.log('📤 Uploading to:', {
+      bucket: params.Bucket,
+      key: params.Key,
+      contentType: params.ContentType
+    });
+
     const result = await s3.upload(params).promise();
+    console.log('✅ Upload successful, S3 result:', result.Location);
 
-    // Update storage usage
-    await provider.increment('used_storage_bytes', buffer.length);
-
-    // Return CDN URL if configured
-    const cdnUrl = process.env.CDN_URL || '';
-    if (cdnUrl) {
-      return `${cdnUrl}/${key}`;
+    // Update storage usage (reload provider to get fresh instance)
+    try {
+      const providerInstance = await StorageProvider.findByPk(provider.id);
+      if (providerInstance) {
+        await providerInstance.increment('used_storage_bytes', { by: buffer.length });
+        console.log('✅ Storage usage updated');
+      }
+    } catch (usageError) {
+      console.warn('⚠️ Failed to update storage usage:', usageError.message);
+      // Don't fail the upload if usage tracking fails
     }
 
+    // Get R2 public URL from system settings (preferred) or environment variable
+    let publicUrl = '';
+    if (provider.provider_name === 'r2') {
+      try {
+        const r2PublicUrlSetting = await SystemSetting.findOne({
+          where: { setting_key: 'r2_public_url' }
+        });
+        if (r2PublicUrlSetting && r2PublicUrlSetting.value) {
+          publicUrl = r2PublicUrlSetting.value.trim();
+          // Ensure URL ends with / if not empty
+          if (publicUrl && !publicUrl.endsWith('/')) {
+            publicUrl += '/';
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to get R2 public URL from settings:', error.message);
+      }
+    }
+
+    // Fallback to CDN_URL env variable if R2 public URL not configured
+    if (!publicUrl) {
+      publicUrl = process.env.CDN_URL || '';
+    }
+
+    // If public URL is configured, use it
+    if (publicUrl) {
+      const finalUrl = `${publicUrl}${key}`;
+      console.log('✅ Final file URL:', finalUrl);
+      return finalUrl;
+    }
+
+    // Otherwise return the S3 location
+    console.log('✅ Returning S3 location:', result.Location);
     return result.Location;
   } catch (error) {
-    console.error('Error uploading file:', error);
+    console.error('❌ Error uploading file:', error);
+    console.error('❌ Error details:', {
+      message: error.message,
+      code: error.code,
+      statusCode: error.statusCode
+    });
     
     // Retry with exponential backoff if R2 fails
-    if (provider.provider_name === 'r2' && error.code !== 'ENOENT') {
-      console.log('R2 upload failed, attempting failover to Wasabi...');
+    if (provider && provider.provider_name === 'r2' && error.code !== 'ENOENT') {
+      console.log('⚠️ R2 upload failed, attempting failover to Wasabi...');
       const wasabiProvider = await StorageProvider.findOne({
         where: { provider_name: 'wasabi', is_active: false }
       });
@@ -83,12 +249,14 @@ const uploadFile = async (key, buffer, contentType) => {
         try {
           wasabiProvider.is_active = true;
           await wasabiProvider.save();
-          provider.is_active = false;
-          await provider.save();
+          if (provider) {
+            provider.is_active = false;
+            await provider.save();
+          }
           
           return await uploadFile(key, buffer, contentType);
         } catch (retryError) {
-          console.error('Failover upload failed:', retryError);
+          console.error('❌ Failover upload failed:', retryError);
           throw error; // Throw original error
         }
       }
@@ -133,16 +301,38 @@ const deleteFile = async (key) => {
 // Get file URL
 const getFileUrl = async (key) => {
   try {
-    const cdnUrl = process.env.CDN_URL;
+    const provider = await getActiveProvider();
     
-    // If CDN is configured, return CDN URL
-    if (cdnUrl) {
-      return `${cdnUrl}/${key}`;
+    // Get R2 public URL from system settings (preferred) or environment variable
+    let publicUrl = '';
+    if (provider.provider_name === 'r2') {
+      try {
+        const r2PublicUrlSetting = await SystemSetting.findOne({
+          where: { setting_key: 'r2_public_url' }
+        });
+        if (r2PublicUrlSetting && r2PublicUrlSetting.value) {
+          publicUrl = r2PublicUrlSetting.value.trim();
+          if (publicUrl && !publicUrl.endsWith('/')) {
+            publicUrl += '/';
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to get R2 public URL from settings:', error.message);
+      }
+    }
+
+    // Fallback to CDN_URL env variable if R2 public URL not configured
+    if (!publicUrl) {
+      publicUrl = process.env.CDN_URL || '';
     }
     
-    const provider = await getActiveProvider();
+    // If public URL is configured, return public URL
+    if (publicUrl) {
+      return `${publicUrl}${key}`;
+    }
+    
+    // Otherwise generate signed URL
     const s3 = configureAWS(provider);
-
     const params = {
       Bucket: provider.bucket_name,
       Key: key,
@@ -194,12 +384,35 @@ const uploadFileStream = async (key, contentType, stream) => {
 
     const s3Stream = s3.upload(uploadParams);
     
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       stream.pipe(s3Stream)
         .on('error', reject)
-        .on('complete', (result) => {
-          const cdnUrl = process.env.CDN_URL || '';
-          const url = cdnUrl ? `${cdnUrl}/${key}` : result.Location;
+        .on('complete', async (result) => {
+          // Get R2 public URL from system settings (preferred) or environment variable
+          let publicUrl = '';
+          if (provider.provider_name === 'r2') {
+            try {
+              const r2PublicUrlSetting = await SystemSetting.findOne({
+                where: { setting_key: 'r2_public_url' }
+              });
+              if (r2PublicUrlSetting && r2PublicUrlSetting.value) {
+                publicUrl = r2PublicUrlSetting.value.trim();
+                if (publicUrl && !publicUrl.endsWith('/')) {
+                  publicUrl += '/';
+                }
+              }
+            } catch (error) {
+              console.warn('Failed to get R2 public URL from settings:', error.message);
+            }
+          }
+
+          // Fallback to CDN_URL env variable if R2 public URL not configured
+          if (!publicUrl) {
+            publicUrl = process.env.CDN_URL || '';
+          }
+
+          // If public URL is configured, use it
+          const url = publicUrl ? `${publicUrl}${key}` : result.Location;
           resolve(url);
         });
     });

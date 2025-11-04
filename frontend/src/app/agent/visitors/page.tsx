@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -48,7 +48,8 @@ import {
   X,
   HelpCircle,
   Minimize2,
-  User as UserIcon
+  User as UserIcon,
+  ExternalLink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
@@ -104,6 +105,8 @@ interface Visitor {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+  rating?: number;
+  ratingFeedback?: string;
   // Enhanced tracking fields
   source?: string;
   medium?: string;
@@ -120,6 +123,129 @@ interface VisitorFilters {
   device: string;
   search: string;
 }
+
+// Helper function to get source display name and keyword
+const getSourceInfo = (visitor: Visitor) => {
+  // Priority: source field > search_engine > referrer domain
+  let sourceName = 'Direct';
+  let keyword = null;
+  
+  if (visitor.source) {
+    sourceName = visitor.source;
+    // Get keyword from visitor.keyword or visitor.term
+    keyword = visitor.keyword || visitor.term || null;
+  } else if (visitor.searchEngine) {
+    sourceName = visitor.searchEngine;
+    keyword = visitor.keyword || visitor.term || null;
+  } else if (visitor.referrer && visitor.referrer !== 'Direct') {
+    try {
+      const url = new URL(visitor.referrer);
+      const hostname = url.hostname.replace('www.', '');
+      
+      // Map common domains to recognizable names
+      if (hostname.includes('google')) {
+        sourceName = 'Google';
+        keyword = visitor.keyword || visitor.term || null;
+      } else if (hostname.includes('bing')) {
+        sourceName = 'Bing';
+        keyword = visitor.keyword || visitor.term || null;
+      } else if (hostname.includes('facebook')) {
+        sourceName = 'Facebook';
+      } else if (hostname.includes('twitter') || hostname.includes('x.com')) {
+        sourceName = 'Twitter';
+      } else if (hostname.includes('linkedin')) {
+        sourceName = 'LinkedIn';
+      } else if (hostname.includes('youtube')) {
+        sourceName = 'YouTube';
+      } else if (hostname.includes('instagram')) {
+        sourceName = 'Instagram';
+      } else {
+        sourceName = hostname.split('.')[0].charAt(0).toUpperCase() + hostname.split('.')[0].slice(1);
+      }
+    } catch {
+      sourceName = visitor.referrer || 'Direct';
+    }
+  }
+  
+  return { sourceName, keyword };
+};
+
+// Source Badge Component with Tooltip (Zendesk-style)
+const SourceBadge: React.FC<{ visitor: Visitor }> = ({ visitor }) => {
+  const { sourceName, keyword } = getSourceInfo(visitor);
+  const [showTooltip, setShowTooltip] = useState(false);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  
+  // Get source badge color based on source name
+  const getSourceColor = (source: string) => {
+    const sourceLower = source.toLowerCase();
+    if (sourceLower.includes('google')) return 'bg-blue-100 text-blue-800 border-blue-200 hover:bg-blue-200';
+    if (sourceLower.includes('bing')) return 'bg-green-100 text-green-800 border-green-200 hover:bg-green-200';
+    if (sourceLower.includes('facebook')) return 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700';
+    if (sourceLower.includes('twitter') || sourceLower.includes('x.com')) return 'bg-gray-900 text-white border-gray-950 hover:bg-gray-800';
+    if (sourceLower.includes('linkedin')) return 'bg-blue-700 text-white border-blue-800 hover:bg-blue-800';
+    if (sourceLower.includes('youtube')) return 'bg-red-600 text-white border-red-700 hover:bg-red-700';
+    if (sourceLower.includes('instagram')) return 'bg-pink-600 text-white border-pink-700 hover:bg-pink-700';
+    if (source === 'Direct') return 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200';
+    return 'bg-purple-100 text-purple-800 border-purple-200 hover:bg-purple-200';
+  };
+
+  // Handle tooltip positioning and visibility
+  useEffect(() => {
+    if (showTooltip && keyword && tooltipRef.current) {
+      const tooltip = tooltipRef.current;
+      const rect = tooltip.getBoundingClientRect();
+      
+      // Adjust position if tooltip goes off-screen
+      if (rect.left < 0) {
+        tooltip.style.left = '0';
+        tooltip.style.transform = 'translateX(0)';
+      } else if (rect.right > window.innerWidth) {
+        tooltip.style.right = '0';
+        tooltip.style.left = 'auto';
+        tooltip.style.transform = 'translateX(0)';
+      }
+    }
+  }, [showTooltip, keyword]);
+
+  return (
+    <div 
+      className="relative inline-block group"
+      onMouseEnter={() => keyword && setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+    >
+      <div
+        className={`inline-flex items-center space-x-1 px-2 py-1 rounded-md text-xs font-medium border transition-colors ${getSourceColor(sourceName)} ${keyword ? 'cursor-help' : ''}`}
+        title={keyword ? `Hover to see keyword: ${keyword}` : undefined}
+      >
+        <Globe className="w-3 h-3" />
+        <span>{sourceName}</span>
+        {keyword && (
+          <Search className="w-3 h-3 opacity-60" />
+        )}
+      </div>
+      {showTooltip && keyword && (
+        <div
+          ref={tooltipRef}
+          className="absolute z-[9999] px-3 py-2 mt-2 text-xs text-white bg-gray-900 rounded-md shadow-xl whitespace-nowrap bottom-full left-1/2 transform -translate-x-1/2 mb-2 animate-in fade-in slide-in-from-bottom-2 duration-200"
+          style={{ pointerEvents: 'none' }}
+        >
+          <div className="flex items-center space-x-2">
+            <Search className="w-3 h-3 flex-shrink-0" />
+            <div>
+              <div className="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Search Keyword</div>
+              <div className="font-semibold text-sm">{keyword}</div>
+            </div>
+          </div>
+          {/* Arrow pointing down */}
+          <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-1">
+            <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent border-t-gray-900"></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface AccordionSectionProps {
   title: string;
@@ -200,7 +326,7 @@ const AccordionSection: React.FC<AccordionSectionProps> = ({
                       Viewing
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Referrer
+                      Source
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Visits
@@ -231,7 +357,11 @@ const AccordionSection: React.FC<AccordionSectionProps> = ({
                           <span className={`text-lg ${iconColor}`}>{icon}</span>
                           <div>
                             <div className="text-sm font-medium text-gray-900 flex items-center space-x-2">
-                              <span>#{visitor.id.slice(-8)}</span>
+                              <span>
+                                {visitor.name && visitor.name.trim() && visitor.name !== 'Anonymous Visitor' 
+                                  ? visitor.name 
+                                  : `#${visitor.id.slice(-8)}`}
+                              </span>
                               {hasNewMessage && (
                                 <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
                               )}
@@ -315,14 +445,9 @@ const AccordionSection: React.FC<AccordionSectionProps> = ({
                         </div>
                       </td>
 
-                      {/* Referrer Column */}
+                      {/* Source Column */}
                       <td className="px-2 py-2 whitespace-nowrap">
-                        <div className="flex items-center space-x-2">
-                          <Search className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm text-gray-500">
-                            {visitor.referrer === 'Direct' || !visitor.referrer ? '-' : visitor.referrer}
-                          </span>
-                        </div>
+                        <SourceBadge visitor={visitor} />
                       </td>
 
                       {/* Visits Column */}
@@ -392,6 +517,7 @@ export default function VisitorsPage() {
   const [newMessage, setNewMessage] = useState('');
   const [isAgentTyping, setIsAgentTyping] = useState(false);
   const [isVisitorTyping, setIsVisitorTyping] = useState(false);
+  const [visitorTypingContent, setVisitorTypingContent] = useState<string>('');
   const [triggerSuggestions, setTriggerSuggestions] = useState<Array<{ id: number; name: string; message: string; description?: string; isFavorite?: boolean }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
@@ -400,11 +526,32 @@ export default function VisitorsPage() {
   const [chatSessionActive, setChatSessionActive] = useState(false);
   const [checkingAgentAssignment, setCheckingAgentAssignment] = useState(false);
   const [agentSettings, setAgentSettings] = useState<any>(null);
+  const [showTransferDialog, setShowTransferDialog] = useState(false);
+  const [availableAgents, setAvailableAgents] = useState<any[]>([]);
+  const [transferring, setTransferring] = useState(false);
   const { socket } = useSocket();
   const { user } = useAuthStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const agentTypingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const selectedVisitorRef = useRef<Visitor | null>(null);
+
+  // Cleanup typing timeout on unmount or visitor change
+  useEffect(() => {
+    return () => {
+      if (agentTypingTimeoutRef.current) {
+        clearTimeout(agentTypingTimeoutRef.current);
+      }
+      // Stop typing when component unmounts or visitor changes
+      if (socket && selectedVisitor) {
+        socket.emit('agent:typing', {
+          visitorId: selectedVisitor.id,
+          isTyping: false
+        });
+      }
+    };
+  }, [socket, selectedVisitor?.id]);
 
   // Request browser notification permission
   useEffect(() => {
@@ -520,46 +667,54 @@ export default function VisitorsPage() {
   };
 
 
-  // Handle visitor information updates with real-time saving
-  const handleVisitorInfoUpdate = async (field: string, value: string) => {
+  // Handle visitor information updates with debounced saving
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [savingStatus, setSavingStatus] = useState<string>('');
+
+  const handleVisitorInfoUpdate = (field: string, value: string) => {
     if (!selectedVisitor) return;
 
-    try {
-      // Update local state immediately for responsive UI
-      setSelectedVisitor(prev => prev ? { ...prev, [field]: value } : null);
-      
-      // Update the visitor in the visitors list as well
-      setVisitors(prev => prev.map(visitor => 
-        visitor.id === selectedVisitor.id 
-          ? { ...visitor, [field]: value }
-          : visitor
-      ));
+    // Update local state immediately for responsive UI
+    setSelectedVisitor(prev => prev ? { ...prev, [field]: value } : null);
+    setVisitors(prev => prev.map(visitor => 
+      visitor.id === selectedVisitor.id 
+        ? { ...visitor, [field]: value }
+        : visitor
+    ));
 
-      // Save to database
-      const response = await apiClient.put(`/agent/visitors/${selectedVisitor.id}/profile`, {
-        [field]: value
-      });
-
-      if (!response.success) {
-        console.error('Failed to update visitor info:', response.message);
-        // Revert local state on error
-        setSelectedVisitor(prev => prev ? { ...prev, [field]: selectedVisitor[field as keyof Visitor] } : null);
-        setVisitors(prev => prev.map(visitor => 
-          visitor.id === selectedVisitor.id 
-            ? { ...visitor, [field]: selectedVisitor[field as keyof Visitor] }
-            : visitor
-        ));
-      }
-    } catch (error) {
-      console.error('Error updating visitor info:', error);
-      // Revert local state on error
-      setSelectedVisitor(prev => prev ? { ...prev, [field]: selectedVisitor[field as keyof Visitor] } : null);
-      setVisitors(prev => prev.map(visitor => 
-        visitor.id === selectedVisitor.id 
-          ? { ...visitor, [field]: selectedVisitor[field as keyof Visitor] }
-          : visitor
-      ));
+    // Clear existing timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
     }
+
+    // Show "Saving..." indicator
+    setSavingStatus('Saving...');
+
+    // Set new timeout to save after 1 second of no typing
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        const response = await apiClient.put(`/agent/visitors/${selectedVisitor.id}/profile`, {
+          [field]: value
+        });
+
+        if (response.success) {
+          console.log(`Saved ${field} to database`);
+          setSavingStatus('Saved');
+          // Clear the "Saved" message after 2 seconds
+          setTimeout(() => {
+            setSavingStatus('');
+          }, 2000);
+        } else {
+          console.error('Failed to update visitor info:', response.message);
+          setSavingStatus('Failed to save');
+          toast.error('Failed to save changes');
+        }
+      } catch (error) {
+        console.error('Error updating visitor info:', error);
+        setSavingStatus('Failed to save');
+        toast.error('Failed to save changes');
+      }
+    }, 1000); // 1 second debounce
   };
 
   // Auto-scroll when messages change
@@ -567,13 +722,43 @@ export default function VisitorsPage() {
     scrollToBottom();
   }, [chatMessages]);
 
+  // Track if initial fetch has been done to prevent refetch on every connection
+  const initialFetchDoneRef = useRef(false);
+
   useEffect(() => {
-    fetchVisitors();
-    setupSocketListeners();
+    if (!socket) {
+      console.warn('⚠️ Socket not available');
+      return;
+    }
+
+    // Set up listeners immediately, but also listen for connection events
+    const handleConnect = () => {
+      console.log('🔌 Socket connected, setting up listeners');
+      setupSocketListeners();
+      
+      // Only fetch visitors on initial connection, not on reconnections
+      if (!initialFetchDoneRef.current) {
+        fetchVisitors();
+        initialFetchDoneRef.current = true;
+      }
+      
+      // Rejoin visitor room if a visitor is selected
+      if (selectedVisitor) {
+        socket.emit('join_visitor_room', { visitorId: selectedVisitor.id });
+        console.log('🔌 Rejoined visitor room on socket connect:', `visitor_${selectedVisitor.id}`);
+      }
+    };
+
+    if (socket.connected) {
+      handleConnect();
+    }
+
+    socket.on('connect', handleConnect);
     
     return () => {
       // Cleanup socket listeners on unmount
       if (socket) {
+        socket.off('connect', handleConnect);
         socket.off('visitor:update');
         socket.off('visitor:status');
         socket.off('visitor:typing');
@@ -581,13 +766,15 @@ export default function VisitorsPage() {
         socket.off('visitor:leave');
         socket.off('visitor:message');
         socket.off('ai:response');
+        socket.off('agent:message');
         socket.off('visitor:chat:typing');
         socket.off('visitor:agent:assigned');
         socket.off('visitor:agent:unassigned');
         socket.off('widget:status');
+        socket.off('visitor:typing-content');
       }
     };
-  }, [socket]);
+  }, [socket]); // Removed selectedVisitor from dependencies to prevent refetch
 
   // Track visitor activity gaps and mark inactive visitors as offline
   useEffect(() => {
@@ -609,28 +796,24 @@ export default function VisitorsPage() {
             const lastActivityTime = new Date(visitor.lastActivity).getTime();
             const timeSinceActivity = now - lastActivityTime;
             
-            // If visitor has been inactive for more than threshold, mark as offline
+            // If visitor has been inactive for more than threshold, remove from list (move to History)
             if (timeSinceActivity > INACTIVITY_THRESHOLD) {
-              console.log(`⚠️ Visitor ${visitor.id} marked as offline due to inactivity (${Math.round(timeSinceActivity / 1000 / 60)}m)`);
+              console.log(`⚠️ Visitor ${visitor.id} removed due to inactivity (${Math.round(timeSinceActivity / 1000 / 60)}m). Moving to History.`);
               hasChanges = true;
               
-              // Update visitor status to offline
-              return {
-                ...visitor,
-                status: 'offline' as const
-              };
+              // Remove visitor from list - they should be in History page
+              // Don't return this visitor (filter it out)
+              return null;
             }
           } else {
-            // If no last activator timestamp, also mark as offline
+            // If no last activity timestamp, remove from list (move to History)
             hasChanges = true;
-            return {
-              ...visitor,
-              status: 'offline' as const
-            };
+            console.log(`⚠️ Visitor ${visitor.id} removed - no activity data. Moving to History.`);
+            return null;
           }
           
           return visitor;
-        });
+        }).filter(visitor => visitor !== null); // Filter out null values
         
         // Only return updated visitors if there were actual changes
         return hasChanges ? updatedVisitors : prev;
@@ -706,9 +889,40 @@ export default function VisitorsPage() {
     }
   }, [visitors, searchParams]);
 
-  useEffect(() => {
-    applyFilters();
+  // Apply filters using useMemo for optimization (prevents unnecessary re-renders)
+  const filteredVisitorsMemo = useMemo(() => {
+    let filtered = [...visitors];
+
+    if (filters.status !== 'all') {
+      filtered = filtered.filter(visitor => visitor.status === filters.status);
+    }
+
+    if (filters.device !== 'all') {
+      filtered = filtered.filter(visitor => visitor.device.type === filters.device);
+    }
+
+    if (filters.search) {
+      const searchTerm = filters.search.toLowerCase();
+      filtered = filtered.filter(visitor => 
+        visitor.name.toLowerCase().includes(searchTerm) ||
+        visitor.email?.toLowerCase().includes(searchTerm) ||
+        visitor.currentPage.toLowerCase().includes(searchTerm) ||
+        visitor.location.city.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    return filtered;
   }, [visitors, filters]);
+
+  // Update filteredVisitors state only when memoized value actually changes
+  useEffect(() => {
+    setFilteredVisitors(filteredVisitorsMemo);
+  }, [filteredVisitorsMemo]);
+
+  // Keep ref in sync with selectedVisitor state
+  useEffect(() => {
+    selectedVisitorRef.current = selectedVisitor;
+  }, [selectedVisitor]);
 
   // Effect to sync chat messages when selectedVisitor changes
   useEffect(() => {
@@ -730,9 +944,19 @@ export default function VisitorsPage() {
         loadChatMessages(selectedVisitor.id);
       }
       
-      // Check if agent is already assigned to this visitor (only if not already checking)
-      if (!checkingAgentAssignment) {
+      // Check if agent is already assigned to this visitor (only if not already checking and not already joined)
+      // Skip check if agent is already joined to prevent disabling textarea during typing
+      if (!checkingAgentAssignment && !agentJoined) {
         checkAgentAssignment(selectedVisitor.id);
+      }
+      
+      // Clear typing preview when switching visitors
+      setVisitorTypingContent('');
+      
+      // Join visitor-specific room to receive typing content events
+      if (socket && socket.connected) {
+        socket.emit('join_visitor_room', { visitorId: selectedVisitor.id });
+        console.log('🔌 Joined visitor room for typing content:', `visitor_${selectedVisitor.id}`);
       }
       
       // Scroll to bottom when opening chat
@@ -742,6 +966,7 @@ export default function VisitorsPage() {
     } else {
       console.log('No visitor selected, clearing chat messages');
       setChatMessages([]);
+      setVisitorTypingContent('');
       setAgentJoined(false);
       setChatSessionActive(false);
       setCheckingAgentAssignment(false);
@@ -749,15 +974,25 @@ export default function VisitorsPage() {
   }, [selectedVisitor]); // Removed globalMessages from dependencies to prevent repeated calls
 
   // Separate effect to sync messages when globalMessages changes (without triggering agent assignment check)
+  // Use a ref to track the previous messages to prevent unnecessary updates
+  const prevGlobalMessagesRef = useRef<Map<string, any[]>>(new Map());
   useEffect(() => {
     if (selectedVisitor) {
       const globalMessagesForVisitor = globalMessages.get(selectedVisitor.id);
-      // Ensure it's an array
-      const messagesArray = Array.isArray(globalMessagesForVisitor) ? globalMessagesForVisitor : [];
+      const prevMessagesForVisitor = prevGlobalMessagesRef.current.get(selectedVisitor.id);
       
-      if (messagesArray.length > 0) {
-        console.log('Syncing updated messages from global store for visitor:', selectedVisitor.id, 'Messages:', messagesArray.length);
-        setChatMessages(messagesArray);
+      // Only update if messages actually changed
+      if (JSON.stringify(globalMessagesForVisitor) !== JSON.stringify(prevMessagesForVisitor)) {
+        // Ensure it's an array
+        const messagesArray = Array.isArray(globalMessagesForVisitor) ? globalMessagesForVisitor : [];
+        
+        if (messagesArray.length > 0) {
+          console.log('Syncing updated messages from global store for visitor:', selectedVisitor.id, 'Messages:', messagesArray.length);
+          setChatMessages(messagesArray);
+        }
+        
+        // Update ref
+        prevGlobalMessagesRef.current = new Map(globalMessages);
       }
     }
   }, [globalMessages, selectedVisitor]);
@@ -843,7 +1078,12 @@ export default function VisitorsPage() {
   };
 
   const setupSocketListeners = () => {
-    if (!socket) return;
+    if (!socket) {
+      console.warn('⚠️ Socket not available for setting up listeners');
+      return;
+    }
+    
+    console.log('🔧 Setting up socket listeners, socket connected:', socket.connected);
 
     // Clean up existing listeners first to prevent duplicates
     socket.off('visitor:update');
@@ -853,47 +1093,79 @@ export default function VisitorsPage() {
     socket.off('visitor:leave');
     socket.off('visitor:message');
     socket.off('ai:response');
+    socket.off('agent:message');
     socket.off('visitor:chat:typing');
     socket.off('visitor:agent:assigned');
     socket.off('visitor:agent:unassigned');
     socket.off('widget:status');
+        socket.off('visitor:typing-content'); // Also clean up typing content listener
+        socket.off('message:seen');
 
     // Listen for visitor updates
     socket.on('visitor:update', (visitor: Visitor) => {
       console.log('🔄 Visitor update received:', visitor);
       
-      // Check if visitor is becoming active (status changed from offline/away to online/idle)
-      const currentVisitor = visitors.find(v => v.id === visitor.id);
-      const wasInactive = currentVisitor && (currentVisitor.status === 'offline' || currentVisitor.status === 'away');
-      const isNowActive = visitor.status !== 'offline' && visitor.status !== 'away';
-      
-      // Play notification sound when visitor becomes active
-      if (wasInactive && isNowActive) {
-        console.log('🔔 Visitor became active, playing notification sound');
-        playNotificationSound();
-      }
-      
-      // Transform visitor data to ensure consistent format
-      const transformedVisitor = {
-        ...visitor,
-        brandName: visitor.brandName || visitor.brand?.name || (visitor as any).brand_name || 'No Brand',
-        brand: visitor.brand || (visitor as any).brand_id ? { 
-          id: (visitor as any).brand_id, 
-          name: visitor.brandName || (visitor as any).brand_name || 'No Brand',
-          primaryColor: visitor.brand?.primaryColor || '#3B82F6'
-        } : undefined
-      };
-      
       setVisitors(prev => {
+        // Check if visitor is becoming active (status changed from offline/away to online/idle)
+        const currentVisitor = prev.find(v => v.id === visitor.id);
+        const wasInactive = currentVisitor && (currentVisitor.status === 'offline' || currentVisitor.status === 'away');
+        const isNowActive = visitor.status !== 'offline' && visitor.status !== 'away';
+        
+        // Play notification sound when visitor becomes active
+        if (wasInactive && isNowActive) {
+          console.log('🔔 Visitor became active, playing notification sound');
+          playNotificationSound();
+        }
+        
+        // Transform visitor data to ensure consistent format
+        const transformedVisitor = {
+          ...visitor,
+          // Explicitly map IP address (handle both snake_case and camelCase)
+          ipAddress: visitor.ipAddress || (visitor as any).ip_address || 'Unknown',
+          // Ensure location is properly structured
+          location: visitor.location && typeof visitor.location === 'object' && !Array.isArray(visitor.location)
+            ? {
+                country: visitor.location.country || 'Unknown',
+                city: visitor.location.city || 'Unknown',
+                region: visitor.location.region || 'Unknown'
+              }
+            : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+          brandName: visitor.brandName || (visitor.brand && typeof visitor.brand === 'object' ? visitor.brand.name : null) || (visitor as any).brand_name || 'No Brand',
+          brand: (visitor.brand && typeof visitor.brand === 'object' && visitor.brand !== null)
+            ? {
+                id: visitor.brand.id || (visitor as any).brand_id,
+                name: visitor.brand.name || visitor.brandName || (visitor as any).brand_name || 'No Brand',
+                primaryColor: visitor.brand.primaryColor || (visitor.brand as any).primary_color || '#3B82F6'
+              }
+            : ((visitor as any).brand_id 
+                ? {
+                    id: (visitor as any).brand_id,
+                    name: visitor.brandName || (visitor as any).brand_name || 'No Brand',
+                    primaryColor: '#3B82F6'
+                  }
+                : undefined)
+        };
+        
         const existingIndex = prev.findIndex(v => v.id === visitor.id);
         if (existingIndex >= 0) {
           const updated = [...prev];
-          // Merge existing visitor data with the update to preserve all fields
-          updated[existingIndex] = { ...updated[existingIndex], ...transformedVisitor };
-          console.log('✅ Updated existing visitor:', visitor.id);
-          return updated;
+          // Merge existing visitor data with the update, but preserve brand if update doesn't have it
+          const existingVisitor = updated[existingIndex];
+          const merged = { ...existingVisitor, ...transformedVisitor };
+          // If the update doesn't include brand data but existing visitor has it, preserve it
+          if ((!merged.brand || merged.brandName === 'No Brand') && existingVisitor.brand && existingVisitor.brandName && existingVisitor.brandName !== 'No Brand') {
+            merged.brand = existingVisitor.brand;
+            merged.brandName = existingVisitor.brandName;
+          }
+          // Only update if there are actual changes to prevent unnecessary re-renders
+          if (JSON.stringify(merged) !== JSON.stringify(existingVisitor)) {
+            updated[existingIndex] = merged;
+            console.log('✅ Updated existing visitor:', visitor.id, 'Brand:', merged.brandName);
+            return updated;
+          }
+          return prev; // No changes, return previous state
         } else {
-          console.log('✅ Added new visitor:', visitor.id);
+          console.log('✅ Added new visitor:', visitor.id, 'Brand:', transformedVisitor.brandName);
           return [...prev, transformedVisitor];
         }
       });
@@ -901,24 +1173,43 @@ export default function VisitorsPage() {
 
     // Listen for visitor status changes
     socket.on('visitor:status', (data: { visitorId: string; status: string }) => {
-      setVisitors(prev => prev.map(visitor => 
-        visitor.id === data.visitorId 
-          ? { ...visitor, status: data.status as any }
-          : visitor
-      ));
+      setVisitors(prev => {
+        return prev.map(visitor => {
+          if (visitor.id === data.visitorId) {
+            // Only update if status actually changed
+            if (visitor.status === data.status) {
+              return visitor; // No change, return same object reference
+            }
+            return { ...visitor, status: data.status as any };
+          }
+          return visitor;
+        });
+      });
       
-      // Add status message to chat if this is the selected visitor
-      if (selectedVisitor && data.visitorId === selectedVisitor.id) {
-        const statusMessage = {
-          id: `visitor-status-${Date.now()}`,
-          sender: 'visitor',
-          content: `📱 Status changed to ${data.status}`,
-          timestamp: new Date().toISOString(),
-          visitorId: data.visitorId,
-          isStatusMessage: true
-        };
-        
-        setChatMessages(prev => [...prev, statusMessage]);
+      // Add status message to chat if this is the selected visitor (but don't do this for every status update)
+      // Only show important status changes
+      if (selectedVisitor && data.visitorId === selectedVisitor.id && 
+          (data.status === 'offline' || data.status === 'online')) {
+        setChatMessages(prev => {
+          // Check if this status message already exists to prevent duplicates
+          const exists = prev.some(msg => 
+            msg.isStatusMessage && 
+            msg.content?.includes(`Status changed to ${data.status}`) &&
+            new Date(msg.timestamp).getTime() > Date.now() - 5000 // Within last 5 seconds
+          );
+          if (exists) return prev;
+          
+          const statusMessage = {
+            id: `visitor-status-${Date.now()}`,
+            sender: 'visitor',
+            content: `📱 Status changed to ${data.status}`,
+            timestamp: new Date().toISOString(),
+            visitorId: data.visitorId,
+            isStatusMessage: true
+          };
+          
+          return [...prev, statusMessage];
+        });
       }
     });
 
@@ -929,6 +1220,61 @@ export default function VisitorsPage() {
           ? { ...visitor, isTyping: data.isTyping }
           : visitor
       ));
+      
+      // Only clear typing content when visitor explicitly stops typing (not just a pause)
+      // The widget will send an empty content message after inactivity, so we don't need to clear here
+      // This ensures the preview stays visible during brief pauses in typing
+    });
+
+    // Listen for visitor typing content (live preview)
+    socket.on('visitor:typing-content', (data: { visitorId: string; content: string; timestamp: string }) => {
+      // Use ref to get current selectedVisitor value (avoid stale closure)
+      const currentSelectedVisitor = selectedVisitorRef.current;
+      
+      // Normalize IDs for comparison (handle both string and number formats)
+      const eventVisitorId = String(data.visitorId || '').trim();
+      const selectedVisitorId = currentSelectedVisitor ? String(currentSelectedVisitor.id || '').trim() : '';
+      
+      console.log('🔤 [FRONTEND] Received visitor:typing-content event:', { 
+        eventVisitorId: eventVisitorId,
+        selectedVisitorId: selectedVisitorId,
+        contentLength: data.content?.length || 0,
+        hasContent: !!data.content && data.content.length > 0,
+        idsMatch: eventVisitorId === selectedVisitorId,
+        hasSelectedVisitor: !!currentSelectedVisitor
+      });
+      
+      // Match visitor IDs (normalized comparison)
+      if (currentSelectedVisitor && eventVisitorId && selectedVisitorId && eventVisitorId === selectedVisitorId) {
+        const previewContent = data.content || '';
+        
+        // Only update if there's content, or explicitly clear if empty string is sent
+        if (previewContent.length > 0) {
+          console.log('✅ [FRONTEND] Matched! Updating typing preview:', { 
+            contentLength: previewContent.length,
+            preview: previewContent.substring(0, 50) + (previewContent.length > 50 ? '...' : '')
+          });
+          // Update the live typing preview - keep it visible while typing
+          setVisitorTypingContent(previewContent);
+          // Scroll to bottom to show the typing preview
+          setTimeout(() => {
+            scrollToBottom();
+          }, 100);
+        } else {
+          // Only clear if explicitly sent as empty (after inactivity timeout)
+          console.log('🗑️ [FRONTEND] Clearing typing preview (empty content received after inactivity)');
+          setVisitorTypingContent('');
+        }
+      } else {
+        console.log('❌ [FRONTEND] No match:', { 
+          reason: !currentSelectedVisitor ? 'no selected visitor' : 
+                  !eventVisitorId ? 'no event visitor ID' :
+                  !selectedVisitorId ? 'no selected visitor ID' :
+                  eventVisitorId !== selectedVisitorId ? 'IDs do not match' : 'unknown',
+          eventVisitorId: eventVisitorId,
+          selectedVisitorId: selectedVisitorId
+        });
+      }
     });
 
     // Listen for new visitors
@@ -941,6 +1287,16 @@ export default function VisitorsPage() {
       // Transform visitor data to ensure consistent format (especially for brand)
       const transformedVisitor = {
         ...visitor,
+        // Explicitly map IP address (handle both snake_case and camelCase)
+        ipAddress: visitor.ipAddress || (visitor as any).ip_address || 'Unknown',
+        // Ensure location is properly structured
+        location: visitor.location && typeof visitor.location === 'object' && !Array.isArray(visitor.location)
+          ? {
+              country: visitor.location.country || 'Unknown',
+              city: visitor.location.city || 'Unknown',
+              region: visitor.location.region || 'Unknown'
+            }
+          : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
         brandName: visitor.brandName || visitor.brand?.name || (visitor as any).brand_name || 'No Brand',
         brand: visitor.brand || (visitor as any).brand_id ? { 
           id: (visitor as any).brand_id, 
@@ -954,8 +1310,19 @@ export default function VisitorsPage() {
         const existingVisitor = prev.find(v => v.id === visitor.id);
         if (existingVisitor) {
           console.log('Visitor already exists, updating instead of adding:', visitor.id);
-          // Update existing visitor instead of adding duplicate
-          return prev.map(v => v.id === visitor.id ? { ...transformedVisitor, ...v } : v);
+          // Update existing visitor, but preserve brand data if new data doesn't have it
+          return prev.map(v => {
+            if (v.id === visitor.id) {
+              const merged = { ...v, ...transformedVisitor };
+              // If the update doesn't include brand data but existing visitor has it, preserve it
+              if ((!merged.brand || merged.brandName === 'No Brand') && v.brand && v.brandName && v.brandName !== 'No Brand') {
+                merged.brand = v.brand;
+                merged.brandName = v.brandName;
+              }
+              return merged;
+            }
+            return v;
+          });
         }
         console.log('Adding new visitor:', visitor.id);
         return [transformedVisitor, ...prev];
@@ -981,12 +1348,23 @@ export default function VisitorsPage() {
     // Listen for visitor leaving
     socket.on('visitor:leave', (visitorId: string) => {
       console.log('🚪 Visitor leaving:', visitorId);
-      // Mark visitor as offline instead of removing
-      setVisitors(prev => prev.map(visitor => 
-        visitor.id === visitorId 
-          ? { ...visitor, status: 'offline' as const }
-          : visitor
-      ));
+      // Remove visitor from list (they should be in History)
+      // When visitor leaves, they should disappear from Visitor page
+      setVisitors(prev => prev.filter(visitor => visitor.id !== visitorId));
+      
+      // Also remove from minimized chats
+      setMinimizedChats(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(visitorId);
+        return newMap;
+      });
+      
+      // If this was the selected visitor, clear selection
+      if (selectedVisitor && visitorId === selectedVisitor.id) {
+        setSelectedVisitor(null);
+        setShowVisitorPanel(false);
+        router.push('/agent/visitors');
+      }
       
       // Add status message to chat if this is the selected visitor
       if (selectedVisitor && visitorId === selectedVisitor.id) {
@@ -1070,17 +1448,28 @@ export default function VisitorsPage() {
     });
 
     // Listen for visitor messages
-    socket.on('visitor:message', (data: { visitorId: string; message: string; sender: string; timestamp: string; messageId: string }) => {
+    socket.on('visitor:message', (data: { visitorId: string; message: string; sender: string; timestamp: string; messageId: string; file_url?: string; file_name?: string; file_size?: number; message_type?: string }) => {
       console.log('Received visitor message:', data);
       console.log('Current selected visitor:', selectedVisitor?.id);
       console.log('Message visitor ID:', data.visitorId);
+      
+      // Clear typing preview only when actual message is sent (not during typing)
+      // Only clear if this is the selected visitor and the message sender is 'visitor'
+      if (selectedVisitor && data.visitorId === selectedVisitor.id && data.sender === 'visitor') {
+        console.log('🗑️ Clearing typing preview - visitor sent message');
+        setVisitorTypingContent('');
+      }
       
       const visitorMessage = {
         id: data.messageId,
         content: data.message,
         sender: data.sender,
         timestamp: data.timestamp,
-        visitorId: data.visitorId
+        visitorId: data.visitorId,
+        file_url: data.file_url,
+        file_name: data.file_name,
+        file_size: data.file_size,
+        message_type: data.message_type
       };
       
       // Update visitor message count
@@ -1149,6 +1538,11 @@ export default function VisitorsPage() {
       if (selectedVisitor && data.visitorId === selectedVisitor.id) {
         console.log('Adding visitor message to current chat:', visitorMessage);
         setChatMessages(prev => [...prev, visitorMessage]);
+        
+        // Scroll to bottom to show the new message
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
         
         // Clear visual notifications for current visitor
         setNewMessageVisitors(prev => {
@@ -1244,10 +1638,207 @@ export default function VisitorsPage() {
       }
     });
 
+    // Listen for message seen status updates
+    socket.on('message:seen', (data: { visitorId: string; messageId: string; timestamp: string }) => {
+      console.log('📬 Message seen status update received:', data);
+      
+      // Update message seen status in global messages
+      setGlobalMessages(prev => {
+        const newMap = new Map(prev);
+        const existingMessages = newMap.get(data.visitorId) || [];
+        const updatedMessages = existingMessages.map(msg => {
+          // Match by exact ID or by string conversion (handles number/string mismatches)
+          const msgIdStr = String(msg.id);
+          const dataIdStr = String(data.messageId);
+          if (msgIdStr === dataIdStr || msg.id === data.messageId) {
+            console.log(`✅ Updating message ${msg.id} to seen status`);
+            return { ...msg, isSeen: true, seenAt: data.timestamp };
+          }
+          return msg;
+        });
+        newMap.set(data.visitorId, updatedMessages);
+        return newMap;
+      });
+      
+      // Update message seen status in current chat if this visitor is selected
+      if (selectedVisitor && data.visitorId === selectedVisitor.id) {
+        console.log(`📬 Updating seen status for current chat - visitor ${data.visitorId}, message ${data.messageId}`);
+        setChatMessages(prev => {
+          const updated = prev.map(msg => {
+            // Match by exact ID or by string conversion (handles number/string mismatches)
+            const msgIdStr = String(msg.id);
+            const dataIdStr = String(data.messageId);
+            if (msgIdStr === dataIdStr || msg.id === data.messageId) {
+              console.log(`✅ Updating message ${msg.id} in chat to seen status`);
+              return { ...msg, isSeen: true, seenAt: data.timestamp };
+            }
+            return msg;
+          });
+          return updated;
+        });
+      } else {
+        console.log(`⚠️ Message seen update not for current visitor. Current: ${selectedVisitor?.id}, Update: ${data.visitorId}`);
+      }
+    });
+
+    // Listen for agent messages (from other agents or current agent)
+    socket.on('agent:message', (data: { visitorId: string; message: string; sender: string; agentId: string; agentName: string; timestamp: string; messageId: string }) => {
+      console.log('Received agent message:', data);
+      
+      const agentMessage = {
+        id: data.messageId,
+        content: data.message,
+        sender: 'agent',
+        senderName: data.agentName,
+        senderId: data.agentId,
+        timestamp: data.timestamp,
+        visitorId: data.visitorId,
+        isSeen: false // Initially unseen until visitor views it
+      };
+      
+      // Check if this is from the current agent (confirmation of their own message)
+      const isCurrentAgent = String(data.agentId) === String(user?.id);
+      
+      // Store message globally for all visitors
+      setGlobalMessages(prev => {
+        const newMap = new Map(prev);
+        const existingMessages = newMap.get(data.visitorId) || [];
+        
+        // Check for duplicates by ID
+        const messageExistsById = existingMessages.some(msg => msg.id === data.messageId);
+        if (messageExistsById) {
+          return prev;
+        }
+        
+        // If this is from current agent, check for pending message with same content and update it
+        if (isCurrentAgent) {
+          const pendingMessageIndex = existingMessages.findIndex(msg => 
+            msg.content === data.message && 
+            msg.sender === 'agent' &&
+            msg.id !== data.messageId &&
+            (!msg.id || String(msg.id).startsWith('temp_') || (typeof msg.id === 'string' && msg.id.length < 10))
+          );
+          
+          if (pendingMessageIndex !== -1) {
+            // Replace pending message with confirmed one
+            const updatedMessages = [...existingMessages];
+            updatedMessages[pendingMessageIndex] = agentMessage;
+            newMap.set(data.visitorId, updatedMessages);
+            return newMap;
+          }
+        }
+        
+        // Otherwise add as new message
+        newMap.set(data.visitorId, [...existingMessages, agentMessage]);
+        return newMap;
+      });
+      
+      // If this visitor is currently selected, update current chat immediately
+      if (selectedVisitor && data.visitorId === selectedVisitor.id) {
+        console.log('Processing agent message for current chat:', agentMessage, 'isCurrentAgent:', isCurrentAgent);
+        
+        setChatMessages(prev => {
+          // Check for duplicates by ID
+          const messageExistsById = prev.some(msg => msg.id === data.messageId);
+          if (messageExistsById) {
+            console.log('Message already exists by ID, skipping');
+            return prev;
+          }
+          
+          // If this is from current agent, check for pending message with same content and replace it
+          if (isCurrentAgent) {
+            const pendingMessageIndex = prev.findIndex(msg => 
+              msg.content === data.message && 
+              msg.sender === 'agent' &&
+              msg.id !== data.messageId &&
+              (!msg.id || String(msg.id).startsWith('temp_') || (typeof msg.id === 'string' && msg.id.length < 10))
+            );
+            
+            if (pendingMessageIndex !== -1) {
+              console.log('Replacing pending message with confirmed message:', pendingMessageIndex);
+              // Replace pending message with confirmed one
+              const updatedMessages = [...prev];
+              updatedMessages[pendingMessageIndex] = agentMessage;
+              return updatedMessages;
+            }
+          }
+          
+          // Otherwise add as new message (from another agent)
+          console.log('Adding new agent message (from another agent)');
+          return [...prev, agentMessage];
+        });
+        
+        // Scroll to bottom when agent message arrives
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
+      } else {
+        console.log('Agent message not for current visitor:', { selectedVisitorId: selectedVisitor?.id, messageVisitorId: data.visitorId });
+      }
+    });
+
     // Listen for visitor typing in chat
     socket.on('visitor:chat:typing', (data: { visitorId: string; isTyping: boolean }) => {
       if (selectedVisitor && data.visitorId === selectedVisitor.id) {
         setIsVisitorTyping(data.isTyping);
+      }
+    });
+
+    // Listen for agent join events (when agent joins a chat - including transferred chats)
+    socket.on('agent:join', (data: { visitorId: string; agentId: string; agentName: string; tenantId: number }) => {
+      console.log('Agent join event received:', data);
+      
+      // If this is the current agent joining and this visitor is selected, show join message
+      const currentSelectedVisitor = selectedVisitorRef.current;
+      if (currentSelectedVisitor && 
+          data.visitorId === currentSelectedVisitor.id && 
+          String(data.agentId) === String(user?.id)) {
+        const joinMessage = {
+          id: `agent-join-${Date.now()}`,
+          content: `${data.agentName} joined the chat.`,
+          sender: 'system',
+          timestamp: new Date().toISOString(),
+          visitorId: data.visitorId,
+          isStatusMessage: true
+        };
+        
+        console.log('Adding agent join message to chat:', joinMessage);
+        setChatMessages(prev => {
+          // Check if this message already exists
+          const exists = prev.some(msg => 
+            msg.isStatusMessage && 
+            msg.content === joinMessage.content && 
+            new Date(msg.timestamp).getTime() > Date.now() - 3000
+          );
+          if (exists) {
+            console.log('Agent join message already exists');
+            return prev;
+          }
+          return [...prev, joinMessage];
+        });
+        
+        // Update agent joined state
+        setAgentJoined(true);
+        setChatSessionActive(true);
+        
+        // Update visitor status from 'waiting_for_agent' to 'online'
+        setVisitors(prev => prev.map(visitor => 
+          visitor.id === data.visitorId 
+            ? { ...visitor, status: 'online' }
+            : visitor
+        ));
+        
+        setSelectedVisitor(prev => {
+          if (prev && prev.id === data.visitorId) {
+            return { ...prev, status: 'online' };
+          }
+          return prev;
+        });
+        
+        // Scroll to bottom to show the message
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
       }
     });
 
@@ -1283,9 +1874,110 @@ export default function VisitorsPage() {
       toast.info('Visitor unassigned from agent');
     });
 
+    // Listen for visitor end chat event
+    socket.on('visitor:end-chat', (data: { visitorId: string; tenantId: number; endedBy: string; rating?: number; feedback?: string; message?: any }) => {
+      console.log('Visitor ended chat received:', data);
+      
+      // Use ref to get current selectedVisitor (not stale closure)
+      const currentSelectedVisitor = selectedVisitorRef.current;
+      
+      // If this is the currently selected visitor, add system message
+      if (currentSelectedVisitor && data.visitorId === currentSelectedVisitor.id) {
+        // Use message from socket event if available, otherwise create default
+        const endMessage = data.message ? {
+          ...data.message,
+          isStatusMessage: true,
+          sender: 'system',
+          content: data.message.content || 'Visitor ended the chat.'
+        } : {
+          id: `visitor-end-${Date.now()}`,
+          content: 'Visitor ended the chat.',
+          sender: 'system',
+          timestamp: new Date().toISOString(),
+          visitorId: data.visitorId,
+          isStatusMessage: true,
+          messageType: 'system',
+          metadata: {
+            event_type: 'chat_ended',
+            ended_by: data.endedBy || 'visitor',
+            rating: data.rating,
+            has_feedback: !!data.feedback
+          }
+        };
+        
+        console.log('Adding visitor end chat message to chat:', endMessage);
+        setChatMessages(prev => {
+          // Check if this message already exists (check by content and timestamp, not just content)
+          const exists = prev.some(msg => 
+            (msg.sender === 'system' || msg.messageType === 'system') &&
+            (msg.content === endMessage.content || msg.content?.includes('ended the chat')) &&
+            new Date(msg.timestamp).getTime() > Date.now() - 10000 // Within last 10 seconds
+          );
+          if (exists) {
+            console.log('Visitor end chat message already exists, skipping duplicate');
+            return prev;
+          }
+          console.log('Adding new visitor end chat message to chatMessages');
+          return [...prev, endMessage];
+        });
+        
+        // Remove visitor from list (they should be in History page)
+        // When visitor ends chat or goes offline, they should disappear from Visitor page
+        setVisitors(prev => prev.filter(visitor => visitor.id !== data.visitorId));
+        
+        // Also remove from minimized chats
+        setMinimizedChats(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(data.visitorId);
+          return newMap;
+        });
+        
+        // If this was the selected visitor, clear selection
+        if (selectedVisitor && selectedVisitor.id === data.visitorId) {
+          setSelectedVisitor(null);
+          setShowVisitorPanel(false);
+          router.push('/agent/visitors');
+        }
+        
+        // Update agent joined state
+        setAgentJoined(false);
+        setChatSessionActive(false);
+        
+        // Scroll to bottom to show the message
+        setTimeout(() => {
+          scrollToBottom();
+        }, 200);
+        
+        // Show notification
+        toast.info('Visitor ended the chat');
+        
+        // Reload messages from database to get the persisted system message (after a longer delay)
+        // This ensures our immediate message is shown first, then gets replaced by the persisted one
+        setTimeout(() => {
+          console.log('Reloading messages from database after visitor ended chat');
+          loadChatMessages(data.visitorId);
+        }, 1000);
+      } else {
+        console.log('Visitor end chat received but not for selected visitor:', {
+          receivedVisitorId: data.visitorId,
+          selectedVisitorId: currentSelectedVisitor?.id
+        });
+        // Remove visitor from list even if not selected (they should be in History)
+        setVisitors(prev => prev.filter(visitor => visitor.id !== data.visitorId));
+        
+        // Also remove from minimized chats
+        setMinimizedChats(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(data.visitorId);
+          return newMap;
+        });
+      }
+    });
+
     // Listen for widget status updates (minimize/maximize)
     socket.on('widget:status', (data: { visitorId: string; status: string; timestamp: string }) => {
-      console.log('Widget status update:', data);
+      console.log('Widget status update received:', data);
+      console.log('Current selectedVisitorRef:', selectedVisitorRef.current?.id);
       
       // Update visitor widget status in the list
       setVisitors(prev => prev.map(visitor => {
@@ -1299,17 +1991,22 @@ export default function VisitorsPage() {
         return visitor;
       }));
       
-      // Add status message to chat if this is the selected visitor
-      if (selectedVisitor && data.visitorId === selectedVisitor.id) {
+      // Immediately show status message in chat if this is the selected visitor
+      // Use ref to always get the current value, not closure value
+      const currentSelectedVisitor = selectedVisitorRef.current;
+      if (currentSelectedVisitor && data.visitorId === currentSelectedVisitor.id) {
         let content = '';
         if (data.status === 'maximized') {
-          content = '🗨️ Visitor Maximized';
+          content = 'Visitor reopened the chat window';
         } else if (data.status === 'minimized') {
-          content = '📦 Visitor Minimized';
+          content = 'Visitor minimized the chat window';
+        } else {
+          content = `Widget status: ${data.status}`;
         }
         
+        // Create status message for immediate display
         const statusMessage = {
-          id: `widget-status-${Date.now()}`,
+          id: `widget-status-${Date.now()}-${Math.random()}`,
           sender: 'system',
           content: content,
           timestamp: data.timestamp || new Date().toISOString(),
@@ -1317,15 +2014,42 @@ export default function VisitorsPage() {
           isStatusMessage: true
         };
         
-        setChatMessages(prev => [...prev, statusMessage]);
+        console.log('Adding widget status message to chat immediately:', statusMessage);
+        setChatMessages(prev => {
+          // Prevent duplicates by checking if a recent status message with same content exists
+          const recentExists = prev.some(msg => 
+            msg.isStatusMessage && 
+            msg.content === content && 
+            new Date(msg.timestamp).getTime() > Date.now() - 3000 // Within last 3 seconds
+          );
+          if (recentExists) {
+            console.log('Duplicate status message prevented');
+            return prev;
+          }
+          return [...prev, statusMessage];
+        });
+        
+        // Also update global messages store
+        setGlobalMessages(prev => {
+          const newMap = new Map(prev);
+          const existingMessages = newMap.get(data.visitorId) || [];
+          // Check for duplicates in global store too
+          const recentExists = existingMessages.some(msg => 
+            msg.isStatusMessage && 
+            msg.content === content && 
+            new Date(msg.timestamp).getTime() > Date.now() - 3000
+          );
+          if (!recentExists) {
+            newMap.set(data.visitorId, [...existingMessages, statusMessage]);
+          }
+          return newMap;
+        });
         
         // Scroll to bottom to show the message
         setTimeout(() => {
           scrollToBottom();
         }, 100);
       }
-      
-      // Widget status notifications removed as requested
     });
 
     // Listen for chat transfer notifications
@@ -1359,6 +2083,68 @@ export default function VisitorsPage() {
       });
     });
 
+    // Listen for chat takeover notifications (when another agent takes over a chat you're handling)
+    socket.on('chat:transferred', (data: { visitorId: string; agentId: string; agentName: string; message: string; timestamp: string; type: string }) => {
+      console.log('Chat takeover notification received:', data);
+      
+      // If this visitor is currently selected, show takeover message
+      if (selectedVisitor && data.visitorId === selectedVisitor.id) {
+        const takeoverMessage = {
+          id: `takeover-${Date.now()}`,
+          content: data.message || `${data.agentName} has taken over this chat.`,
+          sender: 'system',
+          timestamp: data.timestamp || new Date().toISOString(),
+          visitorId: data.visitorId,
+          isStatusMessage: true
+        };
+        
+        setChatMessages(prev => [...prev, takeoverMessage]);
+        
+        // Disable agent joined state since another agent took over
+        setAgentJoined(false);
+        setChatSessionActive(false);
+        
+        // Update visitor state
+        setVisitors(prev => prev.map(visitor => 
+          visitor.id === data.visitorId 
+            ? { 
+                ...visitor, 
+                assignedAgent: {
+                  id: data.agentId,
+                  name: data.agentName
+                },
+                status: 'online' // New agent is now handling
+              }
+            : visitor
+        ));
+        
+        // Update selected visitor if it matches
+        setSelectedVisitor(prev => {
+          if (prev && prev.id === data.visitorId) {
+            return {
+              ...prev,
+              assignedAgent: {
+                id: data.agentId,
+                name: data.agentName
+              },
+              status: 'online'
+            };
+          }
+          return prev;
+        });
+        
+        // Scroll to bottom to show the message
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
+        
+        toast.warning(`Another agent (${data.agentName}) has taken over this chat.`, {
+          duration: 5000,
+          position: 'top-right'
+        });
+      }
+    });
+
     // Listen for transfer messages
     socket.on('transfer:message', (data: { visitorId: string; message: any }) => {
       console.log('Transfer message received:', data);
@@ -1374,20 +2160,22 @@ export default function VisitorsPage() {
       }
     });
 
-    // Listen for general visitor transfer notifications
-    socket.on('visitor:transfer_notification', (data: { visitorId: string; agentId: string; agentName: string; message: string; timestamp: string; type: string }) => {
+    // Listen for general visitor transfer notifications (for agent-to-agent transfers with specific agent)
+    socket.on('visitor:transfer_notification', (data: { visitorId: string; agentId?: string; agentName?: string; message: string; timestamp: string; type: string }) => {
       console.log('Visitor transfer notification received:', data);
       
       // Update visitor status if this visitor is in our list
       setVisitors(prev => prev.map(visitor => {
         if (visitor.id === data.visitorId) {
+          // If agentId is provided, it's a specific agent transfer
+          // If not, it's a pool transfer (no specific agent assigned)
           return {
             ...visitor,
-            assignedAgent: {
+            assignedAgent: data.agentId && data.agentName ? {
               id: data.agentId,
               name: data.agentName
-            },
-            status: 'waiting_for_agent'
+            } : undefined, // No assigned agent for pool transfers
+            status: 'waiting_for_agent' as const
           };
         }
         return visitor;
@@ -1410,6 +2198,57 @@ export default function VisitorsPage() {
       }, 10000);
     });
 
+    // Listen for visitor:transfer event (AI to agent pool - no specific agent)
+    socket.on('visitor:transfer', (data: { visitorId: string; tenantId: number; message?: string; timestamp: string; type: string }) => {
+      console.log('Visitor transfer to pool received:', data);
+      
+      // Update visitor status - set to waiting_for_agent with NO assigned agent
+      setVisitors(prev => prev.map(visitor => {
+        if (visitor.id === data.visitorId) {
+          return {
+            ...visitor,
+            assignedAgent: undefined, // No specific agent - in transfer pool
+            status: 'waiting_for_agent' as const
+          };
+        }
+        return visitor;
+      }));
+      
+      // Update selectedVisitor if it's the current one
+      setSelectedVisitor(prev => {
+        if (prev && prev.id === data.visitorId) {
+          return {
+            ...prev,
+            assignedAgent: undefined,
+            status: 'waiting_for_agent' as const
+          };
+        }
+        return prev;
+      });
+      
+      // Add blinking effect for transferred visitor
+      setBlinkingChats(prev => {
+        const newSet = new Set(prev);
+        newSet.add(data.visitorId);
+        return newSet;
+      });
+      
+      // Auto-stop blinking after 10 seconds
+      setTimeout(() => {
+        setBlinkingChats(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(data.visitorId);
+          return newSet;
+        });
+      }, 10000);
+      
+      // Show toast notification
+      toast.info('New chat available in Transfer Chats', {
+        duration: 5000,
+        position: 'top-right'
+      });
+    });
+
     return () => {
       socket.off('visitor:update');
       socket.off('visitor:status');
@@ -1426,6 +2265,10 @@ export default function VisitorsPage() {
       socket.off('chat:transfer_notification');
       socket.off('transfer:message');
       socket.off('visitor:transfer_notification');
+      socket.off('visitor:transfer');
+      socket.off('agent:join');
+      socket.off('chat:transferred');
+      socket.off('visitor:end-chat');
     };
   };
 
@@ -1452,10 +2295,24 @@ export default function VisitorsPage() {
           messagesCount: visitor.messages_count || visitor.messagesCount || 0,
           visitsCount: visitor.visits_count || visitor.visitsCount || 1,
           isTyping: visitor.is_typing || visitor.isTyping || false,
-          location: visitor.location || { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+          // Explicitly map IP address (handle both snake_case and camelCase)
+          ipAddress: (visitor.ipAddress && visitor.ipAddress !== 'Unknown') 
+            ? visitor.ipAddress 
+            : ((visitor.ip_address && visitor.ip_address !== 'Unknown') 
+              ? visitor.ip_address 
+              : null),
+          // Ensure location is properly structured
+          location: visitor.location && typeof visitor.location === 'object' && !Array.isArray(visitor.location)
+            ? {
+                country: visitor.location.country || 'Unknown',
+                city: visitor.location.city || 'Unknown',
+                region: visitor.location.region || 'Unknown'
+              }
+            : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
           device: visitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
           createdAt: visitor.created_at || visitor.createdAt,
           lastWidgetUpdate: visitor.last_widget_update || visitor.lastWidgetUpdate,
+          widgetStatus: visitor.widget_status || visitor.widgetStatus,
           // Explicitly map referrer
           referrer: visitor.referrer || 'Direct',
           // Explicitly map tracking fields
@@ -1467,9 +2324,15 @@ export default function VisitorsPage() {
           keyword: visitor.keyword,
           searchEngine: visitor.search_engine,
           landingPage: visitor.landing_page,
-          // Explicitly map brand data
-          brand: visitor.brand || null,
-          brandName: visitor.brandName || visitor.brand?.name || 'No Brand'
+          // Explicitly map brand data - ensure brand object is properly structured
+          brand: visitor.brand && typeof visitor.brand === 'object' && visitor.brand !== null
+            ? {
+                id: visitor.brand.id,
+                name: visitor.brand.name || 'No Brand',
+                primaryColor: visitor.brand.primaryColor || visitor.brand.primary_color || '#3B82F6'
+              }
+            : null,
+          brandName: visitor.brandName || (visitor.brand && typeof visitor.brand === 'object' ? visitor.brand.name : null) || 'No Brand'
         }));
         
         // Remove duplicates based on visitor ID
@@ -1678,13 +2541,21 @@ export default function VisitorsPage() {
         console.log('User ID type:', typeof user?.id);
         console.log('Assigned agent ID type:', typeof visitor.assignedAgent?.id);
         
-        if (visitor.assignedAgent && String(visitor.assignedAgent.id) === String(user?.id)) {
-          // Agent is already assigned to this visitor
+        // For transferred chats (status 'waiting_for_agent'), ANY agent can take over by typing
+        // This enables unlimited transfers
+        if (visitor.status === 'waiting_for_agent') {
+          // This is a transferred chat - any agent can take over
+          // Don't set agentJoined automatically - they need to type to join
+          setAgentJoined(false);
+          setChatSessionActive(false);
+          console.log('⚠️ Transferred chat - ANY agent can take over by typing (unlimited transfers enabled)');
+        } else if (visitor.assignedAgent && String(visitor.assignedAgent.id) === String(user?.id)) {
+          // Agent is already assigned and chat is active (not transferred)
           setAgentJoined(true);
           setChatSessionActive(true);
           console.log('✅ Agent is already assigned to this visitor, chat session active');
         } else if (visitor.assignedAgent && String(visitor.assignedAgent.id) !== String(user?.id)) {
-          // Another agent is assigned
+          // Another agent is assigned and chat is active
           setAgentJoined(false);
           setChatSessionActive(false);
           console.log('❌ Another agent is assigned to this visitor');
@@ -1714,8 +2585,23 @@ export default function VisitorsPage() {
           ? response.data 
           : (response.data?.messages || response.data?.data || []);
         
-        // Ensure it's an array
-        const messagesArray = Array.isArray(messages) ? messages : [];
+        // Ensure it's an array and transform system messages to match frontend format
+        const messagesArray = (Array.isArray(messages) ? messages : []).map(msg => ({
+          ...msg,
+          // Mark system messages so they render correctly
+          isStatusMessage: msg.sender === 'system' || msg.messageType === 'system',
+          // Use content if available, otherwise message
+          content: msg.content || msg.message || '',
+          // Ensure timestamp is in ISO format
+          timestamp: msg.timestamp || msg.created_at || new Date().toISOString(),
+          // Handle seen status - for agent messages, check if visitor has read it
+          isSeen: msg.sender === 'agent' ? (msg.isRead || msg.is_read || msg.isSeen || false) : undefined,
+          // Explicitly include file attachment fields
+          file_url: msg.file_url || msg.fileUrl || null,
+          file_name: msg.file_name || msg.fileName || null,
+          file_size: msg.file_size || msg.fileSize || null,
+          message_type: msg.message_type || msg.messageType || 'text'
+        })).reverse(); // Reverse to show oldest first (messages come DESC from API)
         
         setChatMessages(messagesArray);
         
@@ -1789,13 +2675,17 @@ export default function VisitorsPage() {
       }
     }, 10);
     
-    // Add agent message immediately
+    // Add agent message immediately with temporary ID
+    // This will be replaced with the real ID when the socket confirmation arrives
     const agentMessage = {
-      id: Date.now().toString(),
+      id: `temp_${Date.now()}`,
       content: messageContent,
       sender: 'agent',
       timestamp: new Date().toISOString(),
-      visitorId: selectedVisitor.id
+      visitorId: selectedVisitor.id,
+      senderId: user?.id,
+      senderName: user?.name,
+      isSeen: false // Initially unseen until visitor views it
     };
     setChatMessages(prev => [...prev, agentMessage]);
     
@@ -1827,8 +2717,10 @@ export default function VisitorsPage() {
         sender: 'agent'
       });
       
-      if (response.success) {
-        console.log('Agent message sent successfully to visitor');
+      if (response.success && response.data) {
+        console.log('Agent message sent successfully to visitor', response.data);
+        // The socket event will handle updating the message with the real ID
+        // We don't need to add it again here as the socket handler will replace the temp message
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -1837,6 +2729,10 @@ export default function VisitorsPage() {
 
   const handleAgentJoin = async (visitorId: string) => {
     try {
+      // Set agentJoined immediately to prevent textarea from being disabled
+      setAgentJoined(true);
+      setChatSessionActive(true);
+      
       // Update visitor's assigned agent status immediately
       setVisitors(prev => prev.map(visitor => 
         visitor.id === visitorId 
@@ -1864,8 +2760,60 @@ export default function VisitorsPage() {
           agentName: user?.name
         });
       }
+      
+      // Reload messages from database to get the persisted system message
+      setTimeout(() => {
+        loadChatMessages(visitorId);
+      }, 200);
     } catch (error) {
       console.error('Error notifying agent join:', error);
+      // On error, still keep agentJoined true to allow continued typing
+      // The user can retry sending a message
+    }
+  };
+
+  const handleBanVisitor = async () => {
+    if (!selectedVisitor) return;
+    
+    try {
+      // Confirm ban action
+      const confirmed = window.confirm(
+        `Are you sure you want to ban this visitor?\n\nIP Address: ${selectedVisitor.ipAddress || 'Unknown'}\n\nThis will hide the chat widget from this visitor permanently.`
+      );
+      
+      if (!confirmed) return;
+      
+      console.log('Banning visitor:', selectedVisitor.id);
+      
+      // Send ban request to backend
+      const response = await apiClient.banVisitor(selectedVisitor.id);
+      
+      if (response.success) {
+        // Remove visitor from list
+        const bannedVisitorId = selectedVisitor.id;
+        setVisitors(prev => prev.filter(visitor => visitor.id !== bannedVisitorId));
+        
+        // Also remove from minimized chats
+        setMinimizedChats(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(bannedVisitorId);
+          return newMap;
+        });
+        
+        // Clear selection and close panel
+        setSelectedVisitor(null);
+        setShowVisitorPanel(false);
+        setAgentJoined(false);
+        setChatSessionActive(false);
+        
+        toast.success('Visitor banned successfully. The chat widget will no longer be visible to this visitor.');
+        console.log('Visitor banned successfully');
+      } else {
+        toast.error(response.message || 'Failed to ban visitor');
+      }
+    } catch (error: any) {
+      console.error('Error banning visitor:', error);
+      toast.error(error.response?.data?.message || 'Failed to ban visitor');
     }
   };
 
@@ -1882,36 +2830,33 @@ export default function VisitorsPage() {
       });
       
       if (response.success) {
-        // Add end chat message
-        const endMessage = {
-          id: Date.now().toString(),
-          content: 'Chat ended by agent',
-          sender: 'system',
-          timestamp: new Date().toISOString(),
-          visitorId: selectedVisitor.id
-        };
-        setChatMessages(prev => [...prev, endMessage]);
-        
-        // Store in global messages
-        setGlobalMessages(prev => {
-          const newMap = new Map(prev);
-          const existingMessages = newMap.get(selectedVisitor.id) || [];
-          newMap.set(selectedVisitor.id, [...existingMessages, endMessage]);
-          return newMap;
-        });
-        
         // Reset agent state
         setAgentJoined(false);
         setChatSessionActive(false);
         
-        // Clear assigned agent status
-        setVisitors(prev => prev.map(visitor => 
-          visitor.id === selectedVisitor.id 
-            ? { ...visitor, assignedAgent: undefined }
-            : visitor
-        ));
+        // Remove visitor from list (they should be in History page)
+        // When agent ends chat, visitor should disappear from Visitor page
+        const endedVisitorId = selectedVisitor.id;
+        setVisitors(prev => prev.filter(visitor => visitor.id !== endedVisitorId));
         
-        toast.success('Chat ended successfully');
+        // Also remove from minimized chats
+        setMinimizedChats(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(endedVisitorId);
+          return newMap;
+        });
+        
+        // Clear selection and close panel
+        setSelectedVisitor(null);
+        setShowVisitorPanel(false);
+        router.push('/agent/visitors');
+        
+        // Reload messages from database to get the persisted system message
+        setTimeout(() => {
+          loadChatMessages(endedVisitorId);
+        }, 200);
+        
+        toast.success('Chat ended successfully. Visitor moved to History.');
         console.log('Chat ended successfully');
       } else {
         console.error('Failed to end chat:', response.message);
@@ -1920,6 +2865,82 @@ export default function VisitorsPage() {
     } catch (error) {
       console.error('Error ending chat:', error);
       toast.error('Failed to end chat');
+    }
+  };
+
+  const fetchAvailableAgents = async () => {
+    try {
+      const response = await apiClient.getAgentsList();
+      if (response.success) {
+        // Filter out current agent
+        const agents = response.data.filter((agent: any) => agent.id !== user?.id);
+        setAvailableAgents(agents);
+      }
+    } catch (error: any) {
+      console.error('Failed to fetch agents:', error);
+      toast.error('Failed to load agents');
+    }
+  };
+
+  const handleTransferVisitor = async (newAgentId: string) => {
+    if (!selectedVisitor) return;
+
+    try {
+      setTransferring(true);
+      
+      // Call transfer API
+      const response = await apiClient.assignVisitorToAgent(selectedVisitor.id, newAgentId);
+      
+      if (response.success) {
+        toast.success('Visitor transferred successfully');
+        setShowTransferDialog(false);
+        
+        // Add transfer message to chat
+        const transferMessage = {
+          id: `transfer-${Date.now()}`,
+          content: `Chat transferred to ${availableAgents.find(a => a.id === newAgentId)?.name || 'another agent'}`,
+          sender: 'system',
+          timestamp: new Date().toISOString(),
+          visitorId: selectedVisitor.id,
+          isTransferMessage: true
+        };
+        
+        setChatMessages(prev => [...prev, transferMessage]);
+        
+        // Update visitor assignment with correct status for transfer
+        setVisitors(prev => prev.map(visitor => 
+          visitor.id === selectedVisitor.id 
+            ? { 
+                ...visitor, 
+                assignedAgent: {
+                  id: newAgentId,
+                  name: availableAgents.find(a => a.id === newAgentId)?.name || 'Unknown Agent'
+                },
+                status: 'waiting_for_agent' // Set status to indicate transfer
+              }
+            : visitor
+        ));
+        
+        // Update selected visitor with correct status
+        setSelectedVisitor(prev => prev ? {
+          ...prev,
+          assignedAgent: {
+            id: newAgentId,
+            name: availableAgents.find(a => a.id === newAgentId)?.name || 'Unknown Agent'
+          },
+          status: 'waiting_for_agent' // Set status to indicate transfer
+        } : null);
+        
+        // Reset agent joined status since visitor is now assigned to another agent
+        setAgentJoined(false);
+      } else {
+        toast.error(response.message || 'Failed to transfer visitor');
+      }
+    } catch (error: any) {
+      console.error('Error transferring visitor:', error);
+      toast.error(error.message || 'Failed to transfer visitor');
+    } finally {
+      setTransferring(false);
     }
   };
 
@@ -2051,65 +3072,151 @@ export default function VisitorsPage() {
   };
 
   // Visitor categorization functions
-  // Get active visitors - visitors who are currently active (within last 5 minutes)
+  // Get transferred visitors - visitors that have been transferred by AI to agent pool
+  // A visitor is transferred if they have status 'waiting_for_agent' and NO assigned agent
+  // This means the chat is in the transfer pool, visible to all online agents
+  // Manual agent joins set status to 'online' and assign an agent, so they don't appear here
+  const getTransferredVisitors = () => {
+    return visitors.filter(visitor => {
+      // A visitor is considered transferred if:
+      // 1. Their status is 'waiting_for_agent' (indicates AI transfer to pool)
+      // 2. They have NO assigned agent (null or undefined) - means it's in the pool for all agents
+      // Agent-to-agent transfers have assignedAgent set, so they're handled differently
+      const hasNoAssignedAgent = !visitor.assignedAgent || !visitor.assignedAgent.id;
+      const isTransferred = visitor.status === 'waiting_for_agent' && hasNoAssignedAgent;
+      
+      if (isTransferred) {
+        console.log(`🔍 Transferred visitor (in pool): visitor ${visitor.id}:`, {
+          assignedAgent: visitor.assignedAgent,
+          status: visitor.status,
+          hasNoAssignedAgent,
+          isTransferred
+        });
+      }
+      
+      return isTransferred;
+    });
+  };
+
+  // Get active visitors - visitors who are currently active (within last 15 minutes)
+  // Includes: recent activity, widget status changes (minimized/maximized), auto messages, typing
   const getActiveVisitors = () => {
     const now = Date.now();
-    const ACTIVITY_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+    const ACTIVITY_THRESHOLD = 15 * 60 * 1000; // 15 minutes
     
     return visitors.filter(visitor => {
-      // Skip offline visitors
+      // Skip offline visitors (they should be in History)
       if (visitor.status === 'offline') return false;
       
-      // Check if visitor has recent activity (within last 5 minutes)
+      // Skip transferred visitors (they should be in Transfer Chats accordion)
+      // Skip if status is 'waiting_for_agent' AND no assigned agent (in transfer pool)
+      if (visitor.status === 'waiting_for_agent' && (!visitor.assignedAgent || !visitor.assignedAgent.id)) return false;
+      
+      // Check if visitor has recent activity (within last 15 minutes)
       const hasRecentActivity = visitor.lastActivity && 
         (now - new Date(visitor.lastActivity).getTime()) < ACTIVITY_THRESHOLD;
       
       // Check if visitor is typing
       const isActivelyTyping = visitor.isTyping;
       
-      // Only show visitors who are active within threshold OR currently typing
-      const isActive = hasRecentActivity || isActivelyTyping;
+      // Check if widget status changed recently (minimized/maximized) - keep in active
+      // Widget status changes indicate visitor activity
+      const hasRecentWidgetActivity = visitor.lastWidgetUpdate && 
+        (now - new Date(visitor.lastWidgetUpdate).getTime()) < ACTIVITY_THRESHOLD;
       
-      console.log(`🔍 Checking active visitor for visitor ${visitor.id}:`, {
-        status: visitor.status,
-        hasRecentActivity,
-        isActivelyTyping,
-        lastActivity: visitor.lastActivity,
-        minutesSinceActivity: visitor.lastActivity ? Math.round((now - new Date(visitor.lastActivity).getTime()) / (60 * 1000)) : 'N/A',
-        isActive
-      });
+      // Visitors with widget status changes (minimized/maximized) should stay in Active
+      const hasWidgetStatus = visitor.widgetStatus === 'minimized' || visitor.widgetStatus === 'maximized';
+      
+      // Auto message popups would also indicate activity - check for recent messages
+      const hasRecentMessages = visitor.messagesCount > 0 && visitor.lastActivity &&
+        (now - new Date(visitor.lastActivity).getTime()) < ACTIVITY_THRESHOLD;
+      
+      // Visitor is active if: recent activity OR typing OR widget status change OR recent messages
+      const isActive = hasRecentActivity || isActivelyTyping || 
+        (hasWidgetStatus && hasRecentWidgetActivity) || hasRecentMessages;
+      
+      if (isActive) {
+        console.log(`✅ Active visitor ${visitor.id}:`, {
+          status: visitor.status,
+          hasRecentActivity,
+          isActivelyTyping,
+          hasWidgetStatus,
+          hasRecentWidgetActivity,
+          hasRecentMessages,
+          lastActivity: visitor.lastActivity,
+          minutesSinceActivity: visitor.lastActivity ? Math.round((now - new Date(visitor.lastActivity).getTime()) / (60 * 1000)) : 'N/A',
+          widgetStatus: visitor.widgetStatus,
+          lastWidgetUpdate: visitor.lastWidgetUpdate
+        });
+      }
       
       return isActive;
     });
   };
 
   const getIdleVisitors = () => {
+    const now = Date.now();
+    const IDLE_THRESHOLD = 15 * 60 * 1000; // 15 minutes of inactivity = idle
+    
     return visitors.filter(visitor => {
-      // Only show online visitors (exclude offline/away)
-      const isOnline = visitor.status !== 'offline' && visitor.status !== 'away';
+      // Skip offline visitors (they should be in History)
+      if (visitor.status === 'offline') return false;
       
-      // Visitors who are still connected but haven't interacted for 5+ minutes
-      // Check if visitor last activity was 5+ minutes ago (no recent activity)
-      const hasOldActivity = visitor.lastActivity && 
-        (new Date().getTime() - new Date(visitor.lastActivity).getTime()) >= (5 * 60 * 1000);
+      // Skip transferred visitors (they should be in Transfer Chats accordion)
+      // Skip if status is 'waiting_for_agent' AND no assigned agent (in transfer pool)
+      if (visitor.status === 'waiting_for_agent' && (!visitor.assignedAgent || !visitor.assignedAgent.id)) return false;
       
-      // Check if visitor is not actively typing
-      const notTyping = !visitor.isTyping;
+      // Only show online visitors (exclude away)
+      const isOnline = visitor.status !== 'away';
+      if (!isOnline) return false;
       
-      // Include visitors if they are online AND have no activity within last 5 minutes and are not typing
-      const shouldShowInIdle = isOnline && hasOldActivity && notTyping;
+      // Require a valid lastActivity timestamp - if missing, don't show in idle
+      if (!visitor.lastActivity) {
+        return false; // Don't show visitors without activity data in idle
+      }
       
-      console.log(`🔍 Checking idle visitor for visitor ${visitor.id}:`, {
-        isOnline,
-        hasOldActivity,
-        notTyping,
-        status: visitor.status,
-        lastActivity: visitor.lastActivity,
-        isTyping: visitor.isTyping,
-        shouldShowInIdle
-      });
+      // Validate that lastActivity is a valid date
+      const lastActivityDate = new Date(visitor.lastActivity);
+      if (isNaN(lastActivityDate.getTime())) {
+        return false; // Invalid date, don't show in idle
+      }
       
-      return shouldShowInIdle;
+      // Calculate time since last activity
+      const lastActivityTime = lastActivityDate.getTime();
+      const timeSinceActivity = now - lastActivityTime;
+      
+      // Visitor is idle if: not actively typing AND inactive for more than 15 minutes
+      const isIdle = !visitor.isTyping && timeSinceActivity >= IDLE_THRESHOLD;
+      
+      // Also check that they're not in Active section (to avoid duplicates)
+      // Active visitors have recent activity or widget status changes
+      const hasRecentActivity = timeSinceActivity < IDLE_THRESHOLD;
+      const hasRecentWidgetActivity = visitor.lastWidgetUpdate && 
+        (now - new Date(visitor.lastWidgetUpdate).getTime()) < IDLE_THRESHOLD;
+      const hasWidgetStatus = visitor.widgetStatus === 'minimized' || visitor.widgetStatus === 'maximized';
+      
+      // Don't show in Idle if they're still considered Active
+      if (hasRecentActivity || (hasWidgetStatus && hasRecentWidgetActivity)) {
+        return false;
+      }
+      
+      // Ensure timeSinceActivity is positive (not a future date) and reasonable (not more than 1 year old)
+      if (timeSinceActivity < 0 || timeSinceActivity > 365 * 24 * 60 * 60 * 1000) {
+        return false; // Invalid time range, don't show in idle
+      }
+      
+      if (isIdle) {
+        console.log(`💤 Idle visitor ${visitor.id}:`, {
+          isOnline,
+          isIdle,
+          timeSinceActivity: Math.round(timeSinceActivity / 1000 / 60) + ' minutes',
+          status: visitor.status,
+          lastActivity: visitor.lastActivity,
+          isTyping: visitor.isTyping
+        });
+      }
+      
+      return isIdle;
     });
   };
 
@@ -2176,6 +3283,20 @@ export default function VisitorsPage() {
               blinkingChats={blinkingChats}
             />
 
+            {/* Transfer Chats Section */}
+            <AccordionSection
+              title="Transfer Chats"
+              visitors={getTransferredVisitors()}
+              icon="🔄"
+              iconColor="text-blue-500"
+              onVisitorClick={handleStartChat}
+              formatDuration={formatDuration}
+              getPageTitle={getPageTitle}
+              showServedBy={true}
+              newMessageVisitors={newMessageVisitors}
+              blinkingChats={blinkingChats}
+            />
+
             {/* Idle Visitors Section */}
             <AccordionSection
               title="Idle visitors"
@@ -2205,11 +3326,29 @@ export default function VisitorsPage() {
                 {selectedVisitor.name?.charAt(0) || 'V'}
               </div>
               <div>
-                <h2 className="font-semibold">Visitor {selectedVisitor.id.slice(-8)}</h2>
+                <h2 className="font-semibold">
+                  {selectedVisitor.name && selectedVisitor.name.trim() 
+                    ? selectedVisitor.name 
+                    : `Visitor ${selectedVisitor.id.slice(-8)}`}
+                </h2>
                 <p className="text-sm text-gray-300">{selectedVisitor.status}</p>
               </div>
             </div>
             <div className="flex items-center space-x-2">
+              <Button 
+                variant="ghost" 
+                size="sm"
+                className="text-white hover:bg-gray-700"
+                onClick={() => {
+                  setShowTransferDialog(true);
+                  fetchAvailableAgents();
+                }}
+                disabled={!agentJoined}
+                title={!agentJoined ? "Join chat first to transfer" : "Transfer chat to another agent"}
+              >
+                <UserPlus className="w-4 h-4 mr-2" />
+                Transfer
+              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="sm" className="text-white hover:bg-gray-700">
@@ -2225,6 +3364,12 @@ export default function VisitorsPage() {
                       End Chat
                     </DropdownMenuItem>
                   )}
+                  <DropdownMenuItem 
+                    onClick={handleBanVisitor}
+                    className="text-red-600 focus:text-red-600"
+                  >
+                    Ban Visitor
+                  </DropdownMenuItem>
                   <DropdownMenuItem>
                     Export Chat
                   </DropdownMenuItem>
@@ -2256,6 +3401,27 @@ export default function VisitorsPage() {
             <div className="flex-1 bg-white flex flex-col min-h-0">
               {/* Messages Area */}
               <div className="flex-1 p-6 overflow-y-auto" ref={messagesContainerRef}>
+                {/* Rating Display */}
+                {selectedVisitor?.rating && (
+                  <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <span className="text-lg">⭐</span>
+                      <h4 className="font-semibold text-yellow-900">Visitor Rating</h4>
+                    </div>
+                    <div className="flex items-center space-x-1 mb-2">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <span key={star} className={star <= selectedVisitor.rating! ? 'text-yellow-400' : 'text-gray-300'}>
+                          ★
+                        </span>
+                      ))}
+                      <span className="text-sm text-yellow-800 ml-2">({selectedVisitor.rating}/5)</span>
+                    </div>
+                    {selectedVisitor.ratingFeedback && (
+                      <p className="text-sm text-yellow-800 italic mt-2">"{selectedVisitor.ratingFeedback}"</p>
+                    )}
+                  </div>
+                )}
+                
                 {chatMessages.length === 0 ? (
                   <div className="text-center text-gray-500 py-12">
                     <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -2270,18 +3436,67 @@ export default function VisitorsPage() {
                   </div>
                 ) : (
                   <div className="space-y-4">
+                    {/* Real-time Activity Status Display */}
+                    {selectedVisitor && (
+                      <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className={`w-3 h-3 rounded-full ${
+                            selectedVisitor.status === 'online' || selectedVisitor.status === 'idle'
+                              ? 'bg-green-500 animate-pulse'
+                              : selectedVisitor.status === 'away'
+                              ? 'bg-yellow-500'
+                              : 'bg-gray-400'
+                          }`}></div>
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium text-gray-700">
+                              {selectedVisitor.isTyping 
+                                ? 'Visitor is typing...' 
+                                : selectedVisitor.status === 'online' 
+                                ? 'Visitor is online' 
+                                : selectedVisitor.status === 'idle'
+                                ? 'Visitor is idle'
+                                : selectedVisitor.status === 'away'
+                                ? 'Visitor is away'
+                                : 'Visitor status'}
+                            </span>
+                            {selectedVisitor.lastActivity && (
+                              <span className="text-xs text-gray-500">
+                                Last active: {(() => {
+                                  const lastActive = new Date(selectedVisitor.lastActivity);
+                                  const now = new Date();
+                                  const diffMinutes = Math.floor((now.getTime() - lastActive.getTime()) / (1000 * 60));
+                                  if (diffMinutes < 1) return 'Just now';
+                                  if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes > 1 ? 's' : ''} ago`;
+                                  const diffHours = Math.floor(diffMinutes / 60);
+                                  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+                                  return `${Math.floor(diffHours / 24)} day${Math.floor(diffHours / 24) > 1 ? 's' : ''} ago`;
+                                })()}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {selectedVisitor.widgetStatus && (
+                          <div className="text-xs text-gray-500">
+                            Widget: {selectedVisitor.widgetStatus === 'minimized' ? 'Minimized' : 'Maximized'}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
                     {(!chatMessages || !Array.isArray(chatMessages)) ? (
                       <div className="text-center py-4 text-gray-500">Loading messages...</div>
-                    ) : chatMessages.map((message) => (
-                      <div key={message.id} className={`flex ${
-                        message.sender === 'agent' ? 'justify-end' : 
-                        message.sender === 'system' ? 'justify-center' : 'justify-start'
-                      }`}>
-                        {message.sender === 'system' ? (
+                    ) : (
+                      <>
+                        {chatMessages.map((message) => (
+                          <div key={message.id} className={`flex ${
+                            message.sender === 'agent' ? 'justify-end' : 
+                            message.sender === 'system' ? 'justify-center' : 'justify-start'
+                          }`}>
+                        {(message.sender === 'system' || message.messageType === 'system') ? (
                           <div className={`px-4 py-2 rounded-lg text-xs font-medium ${
                             message.isTransferMessage 
                               ? 'bg-blue-100 text-blue-800 border border-blue-200' 
-                              : message.isStatusMessage
+                              : message.isStatusMessage || message.content?.includes('ended the chat')
                               ? 'bg-amber-100 text-amber-800 border border-amber-200'
                               : 'bg-gray-100 text-gray-600'
                           }`}>
@@ -2290,13 +3505,13 @@ export default function VisitorsPage() {
                                 <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
                                 <span>{message.content}</span>
                               </div>
-                            ) : message.isStatusMessage ? (
+                            ) : (message.isStatusMessage || message.content?.includes('ended the chat')) ? (
                               <div className="flex items-center space-x-2">
                                 <div className="w-2 h-2 bg-amber-500 rounded-full"></div>
-                                <span>{message.content}</span>
+                                <span>{message.content || 'Visitor ended the chat.'}</span>
                               </div>
                             ) : (
-                              message.content
+                              message.content || message.message || ''
                             )}
                           </div>
                         ) : (
@@ -2315,21 +3530,122 @@ export default function VisitorsPage() {
                                message.isStatusMessage ? 'System' :
                                selectedVisitor.name || 'Visitor'}
                             </div>
-                            <div>{message.content}</div>
-                            <div className={`text-xs mt-1 ${
+                            <div>
+                              {/* File attachments */}
+                              {(message.file_url || message.fileUrl) && (
+                                <div className="mb-2">
+                                  {(message.message_type === 'image' || message.messageType === 'image' || 
+                                    (message.file_url || message.fileUrl)?.match(/\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i)) ? (
+                                    <div className="relative inline-block max-w-full">
+                                      <a
+                                        href={message.file_url || message.fileUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="block"
+                                      >
+                                        <img
+                                          src={message.file_url || message.fileUrl}
+                                          alt={message.file_name || message.fileName || 'Image'}
+                                          className="max-w-full max-h-64 rounded-lg cursor-pointer hover:opacity-90 transition-opacity shadow-md border border-gray-200"
+                                          onError={(e) => {
+                                            console.error('Image failed to load:', message.file_url || message.fileUrl);
+                                            // Fallback to file link if image fails to load
+                                            const target = e.currentTarget;
+                                            target.style.display = 'none';
+                                            const fallbackLink = target.parentElement?.querySelector('.image-fallback-link') as HTMLElement;
+                                            if (fallbackLink) {
+                                              fallbackLink.style.display = 'inline-flex';
+                                            }
+                                          }}
+                                        />
+                                        <a
+                                          href={message.file_url || message.fileUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="image-fallback-link hidden inline-flex items-center gap-2 px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm transition-colors mt-2"
+                                        >
+                                          <span>📎</span>
+                                          <span>{message.file_name || message.fileName || 'Image'}</span>
+                                          {(message.file_size || message.fileSize) && (
+                                            <span className="text-xs opacity-70">
+                                              ({(message.file_size || message.fileSize) / 1024 < 1024
+                                                ? `${((message.file_size || message.fileSize) / 1024).toFixed(1)} KB`
+                                                : `${((message.file_size || message.fileSize) / 1024 / 1024).toFixed(2)} MB`})
+                                            </span>
+                                          )}
+                                        </a>
+                                      </a>
+                                    </div>
+                                  ) : (
+                                    <a
+                                      href={message.file_url || message.fileUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-2 px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm transition-colors"
+                                    >
+                                      <span>📎</span>
+                                      <span>{message.file_name || message.fileName || 'File'}</span>
+                                      {(message.file_size || message.fileSize) && (
+                                        <span className="text-xs opacity-70">
+                                          ({(message.file_size || message.fileSize) / 1024 < 1024
+                                            ? `${((message.file_size || message.fileSize) / 1024).toFixed(1)} KB`
+                                            : `${((message.file_size || message.fileSize) / 1024 / 1024).toFixed(2)} MB`})
+                                        </span>
+                                      )}
+                                    </a>
+                                  )}
+                                </div>
+                              )}
+                              {/* Show message content - skip if it's just a file attachment placeholder */}
+                              {message.content && message.content.trim() && 
+                               !(message.content.trim().startsWith('📎') && (message.file_url || message.fileUrl)) && (
+                                <div>{message.content}</div>
+                              )}
+                            </div>
+                            <div className={`text-xs mt-1 flex items-center justify-between ${
                               message.sender === 'agent' ? 'text-blue-100' :
                               message.sender === 'ai' ? 'text-green-600' :
                               message.isStatusMessage ? 'text-blue-500' :
                               'text-gray-500'
                             }`}>
-                              {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              {/* Seen/Unseen indicator for agent messages */}
+                              {message.sender === 'agent' && (
+                                <span className={`ml-2 text-[10px] font-medium ${
+                                  message.isSeen ? 'text-blue-200' : 'text-blue-300 opacity-70'
+                                }`}>
+                                  {message.isSeen ? 'Seen' : 'Unseen'}
+                                </span>
+                              )}
                             </div>
                           </div>
                         )}
                       </div>
                     ))}
+                    
+                    {/* Live Typing Preview */}
+                    {visitorTypingContent && visitorTypingContent.trim().length > 0 && (
+                      <div key="typing-preview" className="flex justify-start animate-pulse">
+                        <div className="max-w-[80%] bg-gray-100 border border-dashed border-gray-300 rounded-lg px-4 py-2 opacity-75">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <div className="flex space-x-1">
+                              <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                              <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                              <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                            </div>
+                            <span className="text-xs text-gray-500 italic">typing...</span>
+                          </div>
+                          <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                            {visitorTypingContent}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
                     {/* Invisible div to scroll to */}
                     <div ref={messagesEndRef} />
+                    </>
+                    )}
                   </div>
                 )}
               </div>
@@ -2348,46 +3664,82 @@ export default function VisitorsPage() {
                           : "Type a message to start the conversation..."
                       }
                       value={newMessage}
-                      disabled={checkingAgentAssignment}
+                      disabled={checkingAgentAssignment && !agentJoined}
                       onChange={(e) => {
                         console.log('Textarea onChange - agentJoined:', agentJoined, 'chatSessionActive:', chatSessionActive, 'checkingAgentAssignment:', checkingAgentAssignment);
-                        setNewMessage(e.target.value);
+                        const value = e.target.value;
+                        setNewMessage(value);
                         
                         // Live trigger search
-                        if (e.target.value.length >= 2) {
-                          searchTriggers(e.target.value);
+                        if (value.length >= 2) {
+                          searchTriggers(value);
                         } else {
                           setShowSuggestions(false);
                           setTriggerSuggestions([]);
                           setCurrentSuggestion('');
                         }
                         
-                        if (!agentJoined && !chatSessionActive && e.target.value.trim()) {
-                          setAgentJoined(true);
-                          setChatSessionActive(true);
-                          // Notify that agent joined (only if not already in session)
-                          if (selectedVisitor) {
-                          const joinMessage = {
-                            id: Date.now().toString(),
-                            content: `${user?.name || 'Agent'} joined the chat`,
-                            sender: 'system',
-                            timestamp: new Date().toISOString(),
-                            visitorId: selectedVisitor.id
-                          };
-                          setChatMessages(prev => [...prev, joinMessage]);
-                          
-                          // Store in global messages too
-                          setGlobalMessages(prev => {
-                            const newMap = new Map(prev);
-                            const existingMessages = newMap.get(selectedVisitor.id) || [];
-                            newMap.set(selectedVisitor.id, [...existingMessages, joinMessage]);
-                            return newMap;
+                        // Trigger agent join when typing starts
+                        // For transferred chats (status 'waiting_for_agent'), ANY agent can take over by typing
+                        // This enables unlimited transfers - any agent can take over a transferred chat
+                        const isTransferredChat = selectedVisitor?.status === 'waiting_for_agent';
+                        const shouldJoin = (!agentJoined && !chatSessionActive) || (isTransferredChat && !agentJoined);
+                        
+                        if (shouldJoin && value.trim() && selectedVisitor) {
+                          console.log('Agent typing detected - triggering join:', {
+                            visitorId: selectedVisitor.id,
+                            status: selectedVisitor.status,
+                            assignedAgent: selectedVisitor.assignedAgent,
+                            isTransferredChat,
+                            agentJoined,
+                            chatSessionActive
                           });
                           
-                          // Notify backend that agent joined (disconnect AI)
-                          handleAgentJoin(selectedVisitor.id);
+                          // Set states immediately to prevent textarea from being disabled
+                          // handleAgentJoin will also set these, but setting them here prevents
+                          // any race condition where checkAgentAssignment might run
+                          setAgentJoined(true);
+                          setChatSessionActive(true);
+                          
+                          // Notify backend that agent joined (disconnects AI/previous agent automatically)
+                          // The system message "AgentName joined the chat" will be added by the backend
+                          // Call this asynchronously without awaiting to prevent blocking input
+                          handleAgentJoin(selectedVisitor.id).catch(error => {
+                            console.error('Error joining chat:', error);
+                          });
                         }
-                      }
+
+                        // Emit agent typing events to visitor
+                        if (socket && selectedVisitor && agentJoined) {
+                          // Clear existing timeout
+                          if (agentTypingTimeoutRef.current) {
+                            clearTimeout(agentTypingTimeoutRef.current);
+                          }
+
+                          // Emit typing start if there's text
+                          if (value.trim().length > 0) {
+                            socket.emit('agent:typing', {
+                              visitorId: selectedVisitor.id,
+                              isTyping: true
+                            });
+                          } else {
+                            socket.emit('agent:typing', {
+                              visitorId: selectedVisitor.id,
+                              isTyping: false
+                            });
+                            return;
+                          }
+
+                          // Set timeout to stop typing after 2 seconds of inactivity
+                          agentTypingTimeoutRef.current = setTimeout(() => {
+                            if (socket && selectedVisitor) {
+                              socket.emit('agent:typing', {
+                                visitorId: selectedVisitor.id,
+                                isTyping: false
+                              });
+                            }
+                          }, 2000);
+                        }
                     }}
                     onKeyDown={(e) => {
                       // Handle Enter key to send message (unless suggestions are shown)
@@ -2441,16 +3793,7 @@ export default function VisitorsPage() {
                   </div>
                 </div>
               </div>
-              {isVisitorTyping && (
-                <div className="px-4 text-xs text-gray-500 mt-2 flex items-center space-x-1">
-                  <div className="flex space-x-1">
-                    <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce"></div>
-                    <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                    <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                  </div>
-                  <span>{selectedVisitor?.name || 'Visitor'} is typing...</span>
-                </div>
-              )}
+              
             </div>
 
             {/* Right Column - Visitor Information */}
@@ -2472,10 +3815,21 @@ export default function VisitorsPage() {
 
                 {/* Editable Fields Section */}
                 <div className="mb-6">
-                  <h4 className="text-sm font-medium text-gray-700 mb-4 flex items-center">
-                    <UserIcon className="w-4 h-4 mr-2" />
-                    Contact Details
-                  </h4>
+                  <div className="flex items-center justify-between mb-4">
+                    <h4 className="text-sm font-medium text-gray-700 flex items-center">
+                      <UserIcon className="w-4 h-4 mr-2" />
+                      Contact Details
+                    </h4>
+                    {savingStatus && (
+                      <span className={`text-xs font-medium ${
+                        savingStatus === 'Saved' ? 'text-green-600' : 
+                        savingStatus === 'Failed to save' ? 'text-red-600' : 
+                        'text-blue-600'
+                      }`}>
+                        {savingStatus}
+                      </span>
+                    )}
+                  </div>
                   <div className="grid grid-cols-1 gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-gray-600">Name</label>
@@ -2526,7 +3880,7 @@ export default function VisitorsPage() {
                     <div className="space-y-3">
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-sm text-gray-500">IP</span>
-                        <span className="text-sm font-medium text-gray-900">{selectedVisitor?.ipAddress || 'Unknown'}</span>
+                        <span className="text-sm font-medium text-gray-900">{selectedVisitor?.ipAddress || (selectedVisitor as any)?.ip_address || 'Unknown'}</span>
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-sm text-gray-500">City</span>
@@ -2548,33 +3902,64 @@ export default function VisitorsPage() {
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-sm text-gray-500">Current URL</span>
-                        {selectedVisitor?.currentPage ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 px-3 text-xs"
-                            title={selectedVisitor.currentPage}
-                            onClick={() => window.open(selectedVisitor.currentPage, '_blank')}
-                          >
-                            View
-                          </Button>
-                        ) : (
+                        {selectedVisitor?.currentPage && selectedVisitor.currentPage !== 'Unknown page' ? (() => {
+                          try {
+                            const url = new URL(selectedVisitor.currentPage);
+                            return (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-3 text-xs"
+                                title={selectedVisitor.currentPage}
+                                onClick={() => window.open(selectedVisitor.currentPage, '_blank')}
+                              >
+                                View
+                              </Button>
+                            );
+                          } catch {
+                            return <span className="text-sm font-medium text-gray-500">Invalid URL</span>;
+                          }
+                        })() : (
                           <span className="text-sm font-medium text-gray-500">Unknown</span>
                         )}
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-sm text-gray-500">Base URL</span>
-                        {selectedVisitor?.currentPage ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 px-3 text-xs"
-                            title={new URL(selectedVisitor.currentPage).origin}
-                            onClick={() => window.open(new URL(selectedVisitor.currentPage).origin, '_blank')}
-                          >
-                            View
-                          </Button>
-                        ) : (
+                        {selectedVisitor?.landingPage ? (() => {
+                          try {
+                            const url = new URL(selectedVisitor.landingPage);
+                            return (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-3 text-xs"
+                                title={url.origin}
+                                onClick={() => window.open(url.origin, '_blank')}
+                              >
+                                View
+                              </Button>
+                            );
+                          } catch {
+                            return <span className="text-sm font-medium text-gray-500">Invalid URL</span>;
+                          }
+                        })() : selectedVisitor?.currentPage && selectedVisitor.currentPage !== 'Unknown page' ? (() => {
+                          try {
+                            const url = new URL(selectedVisitor.currentPage);
+                            return (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-3 text-xs"
+                                title={url.origin}
+                                onClick={() => window.open(url.origin, '_blank')}
+                              >
+                                View
+                              </Button>
+                            );
+                          } catch {
+                            return <span className="text-sm font-medium text-gray-500">Invalid URL</span>;
+                          }
+                        })() : (
                           <span className="text-sm font-medium text-gray-500">Unknown</span>
                         )}
                       </div>
@@ -2590,36 +3975,78 @@ export default function VisitorsPage() {
                     Traffic Source
                   </h4>
                   <div className="space-y-3">
+                    {/* Source Badge */}
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-sm text-gray-500">Source</span>
-                      <span className="text-sm font-medium text-gray-900">{selectedVisitor?.source || 'Direct'}</span>
+                      <div className="flex items-center">
+                        <SourceBadge visitor={selectedVisitor} />
+                      </div>
                     </div>
+                    
+                    {/* Medium */}
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-sm text-gray-500">Medium</span>
-                      <span className="text-sm font-medium text-gray-900 capitalize">{selectedVisitor?.medium || '-'}</span>
+                      <Badge variant="outline" className="text-xs capitalize">
+                        {selectedVisitor?.medium || 'None'}
+                      </Badge>
                     </div>
-                    {selectedVisitor?.keyword && (
+                    
+                    {/* Keyword with Tooltip */}
+                    {(selectedVisitor?.keyword || selectedVisitor?.term) && (
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
-                        <span className="text-sm text-gray-500">Keyword</span>
-                        <span className="text-sm font-medium text-blue-600 break-all text-right">{selectedVisitor.keyword}</span>
+                        <span className="text-sm text-gray-500 flex items-center">
+                          <Search className="w-3 h-3 mr-1" />
+                          Keyword
+                        </span>
+                        <div className="flex items-center space-x-2 max-w-[60%]">
+                          <span 
+                            className="text-sm font-medium text-blue-600 break-all text-right cursor-help"
+                            title={selectedVisitor.keyword || selectedVisitor.term}
+                          >
+                            {selectedVisitor.keyword || selectedVisitor.term}
+                          </span>
+                        </div>
                       </div>
                     )}
+                    
+                    {/* Search Engine */}
                     {selectedVisitor?.searchEngine && (
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-sm text-gray-500">Search Engine</span>
-                        <span className="text-sm font-medium text-gray-900">{selectedVisitor.searchEngine}</span>
+                        <Badge variant="outline" className="text-xs">
+                          {selectedVisitor.searchEngine}
+                        </Badge>
                       </div>
                     )}
+                    
+                    {/* Campaign */}
                     {selectedVisitor?.campaign && (
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-sm text-gray-500">Campaign</span>
-                        <span className="text-sm font-medium text-gray-900">{selectedVisitor.campaign}</span>
+                        <span className="text-sm font-medium text-gray-900 max-w-[60%] text-right break-words">
+                          {selectedVisitor.campaign}
+                        </span>
                       </div>
                     )}
+                    
+                    {/* Content */}
+                    {selectedVisitor?.content && (
+                      <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-500">Content</span>
+                        <span className="text-sm font-medium text-gray-900 max-w-[60%] text-right break-words">
+                          {selectedVisitor.content}
+                        </span>
+                      </div>
+                    )}
+                    
+                    {/* Landing Page */}
                     {selectedVisitor?.landingPage && (
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-sm text-gray-500">Landing Page</span>
-                        {selectedVisitor.landingPage ? (
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs text-gray-500 max-w-[200px] truncate" title={selectedVisitor.landingPage}>
+                            {selectedVisitor.landingPage.replace(/^https?:\/\//, '').split('/')[0]}
+                          </span>
                           <Button
                             variant="outline"
                             size="sm"
@@ -2627,11 +4054,21 @@ export default function VisitorsPage() {
                             title={selectedVisitor.landingPage}
                             onClick={() => window.open(selectedVisitor.landingPage, '_blank')}
                           >
-                            View
+                            <ExternalLink className="w-3 h-3" />
                           </Button>
-                        ) : (
-                          <span className="text-sm font-medium text-gray-500">Unknown</span>
-                        )}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Referrer (if different from source) */}
+                    {selectedVisitor?.referrer && 
+                     selectedVisitor.referrer !== 'Direct' && 
+                     !selectedVisitor?.source && (
+                      <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                        <span className="text-sm text-gray-500">Referrer</span>
+                        <span className="text-sm font-medium text-gray-900 max-w-[60%] text-right break-words text-xs">
+                          {selectedVisitor.referrer.replace(/^https?:\/\//, '').split('/')[0]}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -2718,7 +4155,9 @@ export default function VisitorsPage() {
                       👤
                 </div>
                     <span className="text-sm font-medium text-white">
-                      #{visitor.id.slice(-8)}
+                      {visitor.name && visitor.name.trim() && visitor.name !== 'Anonymous Visitor' 
+                        ? visitor.name 
+                        : `#${visitor.id.slice(-8)}`}
                     </span>
                     <div className={`w-2 h-2 rounded-full ${
                       visitor.status === 'online' || visitor.status === 'idle' ? 'bg-green-500' : 
@@ -2755,6 +4194,55 @@ export default function VisitorsPage() {
           })}
         </div>
       )}
+
+      {/* Transfer Visitor Dialog */}
+      <Dialog open={showTransferDialog} onOpenChange={setShowTransferDialog}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Transfer Visitor</DialogTitle>
+            <DialogDescription>
+              Select an agent to transfer this visitor to. The current agent will be notified.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="max-h-[400px] overflow-y-auto pr-4">
+            <div className="space-y-2">
+              {availableAgents.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  No other agents available
+                </div>
+              ) : (
+                availableAgents.map((agent) => (
+                  <button
+                    key={agent.id}
+                    onClick={() => handleTransferVisitor(agent.id.toString())}
+                    disabled={transferring}
+                    className="w-full p-4 border rounded-lg hover:bg-gray-50 transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#13315C] to-[#0B2545] flex items-center justify-center text-white font-semibold">
+                        {agent.name?.charAt(0) || 'A'}
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-medium">{agent.name}</div>
+                        <div className="text-sm text-muted-foreground">{agent.email}</div>
+                        {agent.department && (
+                          <div className="text-xs text-muted-foreground">
+                            {agent.department.name}
+                          </div>
+                        )}
+                      </div>
+                      {transferring && (
+                        <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      )}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

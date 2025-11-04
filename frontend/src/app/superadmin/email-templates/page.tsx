@@ -126,6 +126,8 @@ export default function EmailTemplatesPage() {
       agent_invitation: 'bg-purple-100 text-purple-800',
       notification: 'bg-yellow-100 text-yellow-800',
       chat_assignment: 'bg-indigo-100 text-indigo-800',
+      ticket_created: 'bg-teal-100 text-teal-800',
+      ticket_reply: 'bg-emerald-100 text-emerald-800',
       custom: 'bg-gray-100 text-gray-800'
     };
     return colors[type] || colors.custom;
@@ -139,6 +141,8 @@ export default function EmailTemplatesPage() {
       agent_invitation: 'Agent Invitation',
       notification: 'Notification',
       chat_assignment: 'Chat Assignment',
+      ticket_created: 'Ticket Created',
+      ticket_reply: 'Ticket Reply',
       custom: 'Custom'
     };
     return labels[type] || type;
@@ -200,6 +204,8 @@ export default function EmailTemplatesPage() {
                 <option value="agent_invitation">Agent Invitation</option>
                 <option value="notification">Notification</option>
                 <option value="chat_assignment">Chat Assignment</option>
+                <option value="ticket_created">Ticket Created</option>
+                <option value="ticket_reply">Ticket Reply</option>
                 <option value="custom">Custom</option>
               </select>
             </div>

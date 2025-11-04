@@ -4,8 +4,9 @@ const { authenticateToken, requireAgent } = require('../../middleware/auth');
 const { requireTenant } = require('../../middleware/tenantAuth');
 const { cacheMiddleware } = require('../../middleware/cache');
 const { cache } = require('../../config/redis');
-const { Chat, Message, Ticket, User, Department, AgentSetting, Visitor, VisitorMessage, VisitorActivity, Brand, Trigger } = require('../../models');
+const { Chat, Message, Ticket, User, Department, AgentSetting, Visitor, VisitorMessage, VisitorActivity, Brand, BrandAgent, Trigger, BannedIP } = require('../../models');
 const { Op } = require('sequelize');
+const { getBannedIPsForTenant, isIPBanned, invalidateBannedIPCache } = require('../../services/bannedIPCache');
 
 // Chats management
 router.get('/chats', authenticateToken, requireAgent, requireTenant, async (req, res) => {
@@ -181,23 +182,48 @@ router.get('/history', authenticateToken, requireAgent, requireTenant, async (re
     const { count, rows: chats } = await Chat.findAndCountAll({
       where: whereClause,
       include: [
-        { model: User, as: 'customer', attributes: ['id', 'name', 'email', 'avatar'] },
-        { model: User, as: 'agent', attributes: ['id', 'name', 'email', 'avatar'] },
-        { model: Department, as: 'department', attributes: ['id', 'name'] },
+        { model: User, as: 'customer', attributes: ['id', 'name', 'email', 'avatar'], required: false },
+        { model: User, as: 'agent', attributes: ['id', 'name', 'email', 'avatar'], required: false },
+        { model: Department, as: 'department', attributes: ['id', 'name'], required: false },
         { 
           model: Message, 
           as: 'messages',
           attributes: ['id', 'message', 'created_at', 'sender_type'],
           limit: 1,
-          order: [['created_at', 'DESC']]
+          order: [['created_at', 'DESC']],
+          required: false,
+          separate: true
         },
         ...searchInclude
       ],
-      order: [[sortBy, sortOrder]],
+      order: [[sortBy === 'ended_at' ? 'ended_at' : sortBy === 'started_at' ? 'started_at' : sortBy, sortOrder]],
       limit: parseInt(limit),
       offset: parseInt(offset),
       distinct: true
     });
+    
+    console.log('Chat history query results:', {
+      count,
+      chatsFound: chats.length,
+      tenantId,
+      agentId,
+      userRole: req.user.role,
+      whereClause
+    });
+    
+    // Get message counts for each chat
+    const chatIds = chats.map(chat => chat.id);
+    const messageCounts = {};
+    if (chatIds.length > 0) {
+      const counts = await Message.findAll({
+        attributes: ['chat_id', [Message.sequelize.fn('COUNT', Message.sequelize.col('id')), 'count']],
+        where: { chat_id: { [Op.in]: chatIds } },
+        group: ['chat_id']
+      });
+      counts.forEach(item => {
+        messageCounts[item.chat_id] = parseInt(item.get('count'));
+      });
+    }
     
     // Transform the data
     const transformedChats = chats.map(chat => ({
@@ -232,7 +258,7 @@ router.get('/history', authenticateToken, requireAgent, requireTenant, async (re
         createdAt: chat.messages[0].created_at,
         senderType: chat.messages[0].sender_type
       } : null,
-      messageCount: chat.messageCount || 0
+      messageCount: messageCounts[chat.id] || 0
     }));
     
     res.json({
@@ -605,19 +631,16 @@ router.put('/settings', authenticateToken, requireAgent, async (req, res) => {
   }
 });
 
-// File upload (placeholder)
+// File upload endpoint - now uses R2 storage via /api/uploads/chat-attachment
+// This endpoint is kept for backward compatibility but delegates to the uploads service
 router.post('/files/upload', authenticateToken, requireAgent, requireTenant, async (req, res) => {
   try {
-    // This would integrate with storage service (R2/Wasabi)
-    // For now, return a placeholder response
-    res.json({
-      success: true,
-      message: 'File upload endpoint - to be implemented with storage service',
-      data: {
-        url: 'placeholder-url',
-        filename: req.body.filename || 'uploaded-file',
-        size: req.body.size || 0
-      }
+    // This endpoint is deprecated in favor of /api/uploads/chat-attachment
+    // Redirect to use the new upload service
+    res.status(301).json({
+      success: false,
+      message: 'Please use /api/uploads/chat-attachment endpoint for file uploads',
+      redirect: '/api/uploads/chat-attachment'
     });
   } catch (error) {
     console.error('File upload error:', error);
@@ -633,7 +656,7 @@ router.get('/visitors', authenticateToken, requireAgent, requireTenant, async (r
     const { status, device, search, page = 1, limit = 50 } = req.query;
     const offset = (page - 1) * limit;
 
-    // Get agent's assigned brands
+    // Get agent's assigned brands - REQUIRED for agents
     const { BrandAgent } = require('../../models');
     const assignedBrands = await BrandAgent.findAll({
       where: {
@@ -645,15 +668,28 @@ router.get('/visitors', authenticateToken, requireAgent, requireTenant, async (r
 
     const assignedBrandIds = assignedBrands.map(ba => ba.brand_id);
 
+    // If agent has no brand assignments, return empty list (security: don't show any visitors)
+    if (assignedBrandIds.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          total: 0,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: 0
+        }
+      });
+    }
+
     const whereClause = { 
       tenant_id: tenantId,
-      is_active: true 
+      is_active: true,
+      // Exclude offline visitors from active visitors list
+      status: { [Op.ne]: 'offline' },
+      // REQUIRED: Only show visitors from assigned brands
+      brand_id: { [Op.in]: assignedBrandIds }
     };
-
-    // Filter by assigned brands (if agent has brand assignments)
-    if (assignedBrandIds.length > 0) {
-      whereClause.brand_id = { [Op.in]: assignedBrandIds };
-    }
 
     if (status && status !== 'all') {
       whereClause.status = status;
@@ -661,6 +697,18 @@ router.get('/visitors', authenticateToken, requireAgent, requireTenant, async (r
 
     if (device && device !== 'all') {
       whereClause['device.type'] = device;
+    }
+
+    // Get all banned IPs for this tenant (cached)
+    const bannedIPAddresses = await getBannedIPsForTenant(tenantId);
+
+    // Exclude visitors with banned IPs
+    if (bannedIPAddresses.length > 0) {
+      whereClause.ip_address = {
+        [Op.notIn]: bannedIPAddresses,
+        [Op.ne]: null,
+        [Op.ne]: 'Unknown'
+      };
     }
 
     const { count, rows: visitors } = await Visitor.findAndCountAll({
@@ -706,9 +754,21 @@ router.get('/visitors', authenticateToken, requireAgent, requireTenant, async (r
       status: visitor.status,
       currentPage: visitor.current_page || 'Unknown page',
       referrer: visitor.referrer || 'Direct',
-      ipAddress: visitor.ip_address || 'Unknown',
-      location: visitor.location || { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
-      device: visitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
+      ipAddress: visitor.ip_address && visitor.ip_address !== 'Unknown' ? visitor.ip_address : (visitor.ipAddress && visitor.ipAddress !== 'Unknown' ? visitor.ipAddress : null),
+      location: visitor.location && typeof visitor.location === 'object' && !Array.isArray(visitor.location)
+        ? {
+            country: visitor.location.country || 'Unknown',
+            city: visitor.location.city || 'Unknown',
+            region: visitor.location.region || 'Unknown'
+          }
+        : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+      device: visitor.device && typeof visitor.device === 'object' && !Array.isArray(visitor.device)
+        ? {
+            type: visitor.device.type || 'desktop',
+            browser: visitor.device.browser || 'Unknown',
+            os: visitor.device.os || 'Unknown'
+          }
+        : { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
       lastActivity: visitor.last_activity,
       sessionDuration: visitor.session_duration ? visitor.session_duration.toString() : '0',
       messagesCount: visitor.messages_count || 0,
@@ -725,7 +785,17 @@ router.get('/visitors', authenticateToken, requireAgent, requireTenant, async (r
       notes: visitor.notes,
       createdAt: visitor.created_at,
       updatedAt: visitor.updated_at,
-      lastWidgetUpdate: visitor.last_widget_update
+      lastWidgetUpdate: visitor.last_widget_update,
+      widgetStatus: visitor.widget_status,
+      // Enhanced tracking fields
+      source: visitor.source || 'Direct',
+      medium: visitor.medium || null,
+      campaign: visitor.campaign || null,
+      content: visitor.content || null,
+      term: visitor.term || null,
+      keyword: visitor.keyword || null,
+      searchEngine: visitor.search_engine || null,
+      landingPage: visitor.landing_page || null
     }));
 
     res.json({
@@ -748,17 +818,46 @@ router.get('/visitors/:id', authenticateToken, requireAgent, requireTenant, asyn
   try {
     const { id } = req.params;
     const tenantId = req.user.tenant_id;
+    const agentId = req.user.id;
+
+    // Get agent's assigned brands - REQUIRED
+    const { BrandAgent } = require('../../models');
+    const assignedBrands = await BrandAgent.findAll({
+      where: {
+        agent_id: agentId,
+        status: 'active'
+      },
+      attributes: ['brand_id']
+    });
+
+    const assignedBrandIds = assignedBrands.map(ba => ba.brand_id);
+
+    // If agent has no brand assignments, deny access
+    if (assignedBrandIds.length === 0) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Access denied: No brand assignments' 
+      });
+    }
 
     const visitor = await Visitor.findOne({
       where: { 
         id, 
-        tenant_id: tenantId 
+        tenant_id: tenantId,
+        // REQUIRED: Only allow access if visitor is from assigned brand
+        brand_id: { [Op.in]: assignedBrandIds }
       },
       include: [
         {
           model: User,
           as: 'assignedAgent',
           attributes: ['id', 'name', 'avatar', 'email'],
+          required: false
+        },
+        {
+          model: Brand,
+          as: 'brand',
+          attributes: ['id', 'name', 'primary_color'],
           required: false
         }
       ]
@@ -768,9 +867,63 @@ router.get('/visitors/:id', authenticateToken, requireAgent, requireTenant, asyn
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
 
+    // Transform visitor data to match frontend interface (same as /visitors endpoint)
+    const transformedVisitor = {
+      id: visitor.id,
+      name: visitor.name || 'Anonymous Visitor',
+      email: visitor.email,
+      phone: visitor.phone,
+      avatar: visitor.avatar,
+      status: visitor.status,
+      currentPage: visitor.current_page || 'Unknown page',
+      referrer: visitor.referrer || 'Direct',
+      ipAddress: visitor.ip_address && visitor.ip_address !== 'Unknown' ? visitor.ip_address : (visitor.ipAddress && visitor.ipAddress !== 'Unknown' ? visitor.ipAddress : null),
+      location: visitor.location && typeof visitor.location === 'object' && !Array.isArray(visitor.location)
+        ? {
+            country: visitor.location.country || 'Unknown',
+            city: visitor.location.city || 'Unknown',
+            region: visitor.location.region || 'Unknown'
+          }
+        : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+      device: visitor.device && typeof visitor.device === 'object' && !Array.isArray(visitor.device)
+        ? {
+            type: visitor.device.type || 'desktop',
+            browser: visitor.device.browser || 'Unknown',
+            os: visitor.device.os || 'Unknown'
+          }
+        : { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
+      lastActivity: visitor.last_activity,
+      sessionDuration: visitor.session_duration ? visitor.session_duration.toString() : '0',
+      messagesCount: visitor.messages_count || 0,
+      visitsCount: visitor.visits_count || 1,
+      isTyping: visitor.is_typing || false,
+      assignedAgent: visitor.assignedAgent,
+      brand: visitor.brand ? {
+        id: visitor.brand.id,
+        name: visitor.brand.name,
+        primaryColor: visitor.brand.primary_color
+      } : null,
+      brandName: visitor.brand?.name || 'No Brand',
+      tags: visitor.tags || [],
+      notes: visitor.notes,
+      createdAt: visitor.created_at,
+      updatedAt: visitor.updated_at,
+      lastWidgetUpdate: visitor.last_widget_update,
+      widgetStatus: visitor.widget_status,
+      // Enhanced tracking fields
+      source: visitor.source || 'Direct',
+      medium: visitor.medium || null,
+      campaign: visitor.campaign || null,
+      content: visitor.content || null,
+      term: visitor.term || null,
+      keyword: visitor.keyword || null,
+      searchEngine: visitor.search_engine || null,
+      landingPage: visitor.landing_page || null
+    };
+
     res.json({
       success: true,
-      data: visitor
+      data: transformedVisitor
     });
   } catch (error) {
     console.error('Get visitor error:', error);
@@ -808,9 +961,91 @@ router.put('/visitors/:id/assign', authenticateToken, requireAgent, requireTenan
       if (!agent) {
         return res.status(400).json({ success: false, message: 'Invalid agent' });
       }
+      
+      // When assigning an agent (transfer), set status to 'waiting_for_agent'
+      await visitor.update({ 
+        assigned_agent_id: agentId,
+        status: 'waiting_for_agent' // Indicates transfer, not manual join
+      });
+      
+      // Reload visitor with associations to emit update
+      await visitor.reload({
+        include: [
+          {
+            model: User,
+            as: 'assignedAgent',
+            attributes: ['id', 'name', 'avatar'],
+            required: false
+          },
+          {
+            model: Brand,
+            as: 'brand',
+            attributes: ['id', 'name', 'primary_color'],
+            required: false
+          }
+        ]
+      });
+      
+      // Emit visitor update to notify all agents
+      const io = req.app.get('io');
+      if (io) {
+        const transformedVisitor = {
+          id: visitor.id,
+          name: visitor.name,
+          email: visitor.email,
+          phone: visitor.phone,
+          avatar: visitor.avatar,
+          status: visitor.status,
+          currentPage: visitor.current_page,
+          referrer: visitor.referrer || 'Direct',
+          ipAddress: visitor.ip_address && visitor.ip_address !== 'Unknown' ? visitor.ip_address : (visitor.ipAddress && visitor.ipAddress !== 'Unknown' ? visitor.ipAddress : null),
+          location: visitor.location || { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+          device: visitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
+          lastActivity: visitor.last_activity,
+          sessionDuration: visitor.session_duration?.toString() || '0',
+          messagesCount: visitor.messages_count || 0,
+          visitsCount: visitor.visits_count || 1,
+          isTyping: visitor.is_typing || false,
+          assignedAgent: visitor.assignedAgent,
+          brand: visitor.brand ? {
+            id: visitor.brand.id,
+            name: visitor.brand.name,
+            primaryColor: visitor.brand.primary_color
+          } : null,
+          brandName: visitor.brand?.name || 'No Brand',
+          tags: visitor.tags || [],
+          notes: visitor.notes,
+          createdAt: visitor.created_at,
+          updatedAt: visitor.updated_at,
+          lastWidgetUpdate: visitor.last_widget_update,
+          widgetStatus: visitor.widget_status,
+          // Enhanced tracking fields
+          source: visitor.source || 'Direct',
+          medium: visitor.medium || null,
+          campaign: visitor.campaign || null,
+          content: visitor.content || null,
+          term: visitor.term || null,
+          keyword: visitor.keyword || null,
+          searchEngine: visitor.search_engine || null,
+          landingPage: visitor.landing_page || null
+        };
+        
+        // Emit to brand-specific room so only agents assigned to this brand see the update
+        if (visitor.brand_id) {
+          io.to(`brand_${visitor.brand_id}`).emit('visitor:update', transformedVisitor);
+          console.log(`Emitted visitor:update to brand room: brand_${visitor.brand_id}`);
+        } else {
+          console.warn('Visitor has no brand_id, emitting to tenant room as fallback');
+          io.to(`tenant_${tenantId}`).emit('visitor:update', transformedVisitor);
+        }
+      }
+    } else {
+      // When unassigning, reset status
+      await visitor.update({ 
+        assigned_agent_id: null,
+        status: 'idle' // Reset to idle when unassigned
+      });
     }
-
-    await visitor.update({ assigned_agent_id: agentId || null });
 
     res.json({
       success: true,
@@ -922,8 +1157,12 @@ router.get('/visitors/:id/messages', authenticateToken, requireAgent, requireTen
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
 
-    // Check if visitor belongs to agent's assigned brands
-    if (assignedBrandIds.length > 0 && !assignedBrandIds.includes(visitor.brand_id)) {
+    // REQUIRED: Check if visitor belongs to agent's assigned brands
+    if (assignedBrandIds.length === 0) {
+      return res.status(403).json({ success: false, message: 'Access denied: No brand assignments' });
+    }
+    
+    if (!assignedBrandIds.includes(visitor.brand_id)) {
       return res.status(403).json({ success: false, message: 'Access denied: Visitor not in assigned brands' });
     }
 
@@ -967,6 +1206,9 @@ router.get('/visitors/:id/messages', authenticateToken, requireAgent, requireTen
       isRead: msg.is_read,
       readAt: msg.read_at,
       messageType: msg.message_type,
+      file_url: msg.file_url,
+      file_name: msg.file_name,
+      file_size: msg.file_size,
       metadata: msg.metadata
     }));
 
@@ -1040,8 +1282,12 @@ router.post('/visitors/:id/messages', authenticateToken, requireAgent, requireTe
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
 
-    // Check if visitor belongs to agent's assigned brands
-    if (assignedBrandIds.length > 0 && !assignedBrandIds.includes(visitor.brand_id)) {
+    // REQUIRED: Check if visitor belongs to agent's assigned brands
+    if (assignedBrandIds.length === 0) {
+      return res.status(403).json({ success: false, message: 'Access denied: No brand assignments' });
+    }
+    
+    if (!assignedBrandIds.includes(visitor.brand_id)) {
       return res.status(403).json({ success: false, message: 'Access denied: Visitor not in assigned brands' });
     }
 
@@ -1118,21 +1364,74 @@ router.put('/visitors/:id/profile', authenticateToken, requireAgent, requireTena
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
 
-    await visitor.update({
-      name: name || visitor.name,
-      email: email || visitor.email,
-      phone: phone || visitor.phone,
-      notes: notes || visitor.notes,
-      tags: tags || visitor.tags
+    // Build update object - only update fields that are explicitly provided (undefined means don't update)
+    // Allow empty strings to clear fields, but preserve existing value if undefined
+    const updateData = {};
+    
+    if (name !== undefined) {
+      // Name is required, so only update if not empty
+      if (name.trim()) {
+        updateData.name = name.trim();
+      } else {
+        // Don't update if name would be empty (keep existing name)
+        console.warn('Name cannot be empty, keeping existing name');
+      }
+    }
+    if (email !== undefined) {
+      updateData.email = email || null; // Allow empty string, convert to null for database
+    }
+    if (phone !== undefined) {
+      updateData.phone = phone || null; // Allow empty string, convert to null for database
+    }
+    if (notes !== undefined) {
+      updateData.notes = notes || null; // Allow empty string, convert to null for database
+    }
+    if (tags !== undefined) {
+      updateData.tags = tags || []; // Allow empty array
+    }
+    
+    console.log('Updating visitor profile:', { visitorId: id, updateData });
+    
+    await visitor.update(updateData);
+    
+    // Reload visitor to get updated data
+    await visitor.reload();
+
+    console.log('Visitor profile updated successfully:', {
+      name: visitor.name,
+      email: visitor.email,
+      phone: visitor.phone,
+      notes: visitor.notes ? 'present' : 'null'
     });
 
     res.json({
       success: true,
-      message: 'Visitor profile updated successfully'
+      message: 'Visitor profile updated successfully',
+      data: {
+        name: visitor.name,
+        email: visitor.email,
+        phone: visitor.phone,
+        notes: visitor.notes,
+        tags: visitor.tags
+      }
     });
   } catch (error) {
     console.error('Update visitor profile error:', error);
-    res.status(500).json({ success: false, message: 'Failed to update visitor profile' });
+    
+    // Handle validation errors
+    if (error.name === 'SequelizeValidationError') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Validation error',
+        errors: error.errors.map(e => e.message)
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to update visitor profile',
+      error: error.message 
+    });
   }
 });
 
@@ -1145,17 +1444,64 @@ router.post('/visitors/:id/agent-join', authenticateToken, requireAgent, require
 
     // Update visitor to assign agent and disable AI
     const visitor = await Visitor.findOne({
-      where: { id, tenant_id: tenantId }
+      where: { id, tenant_id: tenantId },
+      include: [
+        {
+          model: User,
+          as: 'assignedAgent',
+          attributes: ['id', 'name'],
+          required: false
+        }
+      ]
     });
 
     if (!visitor) {
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
 
-    // Update visitor with assigned agent
+    // Check if there was a previous agent assigned
+    const previousAgentId = visitor.assigned_agent_id;
+    const previousAgentName = visitor.assignedAgent?.name || 'Previous agent';
+    const isTransfer = previousAgentId && previousAgentId !== agentId;
+
+    // Notify previous agent if different agent is joining
+    if (isTransfer && previousAgentId) {
+      const io = req.app.get('io');
+      if (io) {
+        // Notify previous agent they've been disconnected
+        io.to(`user_${previousAgentId}`).emit('chat:transferred', {
+          visitorId: id,
+          agentId: agentId,
+          agentName: agentName,
+          message: `${agentName} has taken over this chat.`,
+          timestamp: new Date().toISOString(),
+          type: 'agent_takeover'
+        });
+      }
+    }
+
+    // Update visitor with new assigned agent
     await visitor.update({
       assigned_agent_id: agentId,
-      status: 'online' // Set to online when agent joins
+      status: 'online' // Set to online when agent joins (changed from 'waiting_for_agent')
+    });
+
+    // Store system message in database
+    await VisitorMessage.create({
+      visitor_id: id,
+      tenant_id: tenantId,
+      sender_type: 'system',
+      sender_name: 'System',
+      message: `${agentName} joined the chat.`,
+      message_type: 'system',
+      is_read: false,
+      metadata: {
+        event_type: 'agent_join',
+        agent_id: agentId,
+        agent_name: agentName,
+        previous_agent_id: isTransfer ? previousAgentId : null,
+        is_transfer_takeover: isTransfer
+      }
     });
 
     // Emit socket event to notify widget that AI should be disabled
@@ -1209,6 +1555,22 @@ router.post('/visitors/:id/agent-leave', authenticateToken, requireAgent, requir
     await visitor.update({
       assigned_agent_id: null,
       status: 'idle' // Set to idle when agent leaves
+    });
+
+    // Store system message in database
+    await VisitorMessage.create({
+      visitor_id: id,
+      tenant_id: tenantId,
+      sender_type: 'system',
+      sender_name: 'System',
+      message: `${agentName} left the chat.`,
+      message_type: 'system',
+      is_read: false,
+      metadata: {
+        event_type: 'agent_leave',
+        agent_id: agentId,
+        agent_name: agentName
+      }
     });
 
     // Emit socket event to notify widget that AI should be re-enabled
@@ -1290,6 +1652,230 @@ router.get('/visitors/:id/activities', authenticateToken, requireAgent, requireT
   } catch (error) {
     console.error('Get visitor activities error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch visitor activities' });
+  }
+});
+
+// Ban visitor by IP address
+router.post('/visitors/:id/ban', authenticateToken, requireAgent, requireTenant, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const tenantId = req.user.tenant_id;
+    const agentId = req.user.id;
+
+    // Get agent's assigned brands
+    const { BrandAgent } = require('../../models');
+    const assignedBrands = await BrandAgent.findAll({
+      where: {
+        agent_id: agentId,
+        status: 'active'
+      },
+      attributes: ['brand_id']
+    });
+
+    const assignedBrandIds = assignedBrands.map(ba => ba.brand_id);
+
+    // Verify the visitor belongs to one of the agent's assigned brands
+    const visitor = await Visitor.findOne({
+      where: {
+        id: id,
+        tenant_id: tenantId,
+        is_active: true
+      },
+      attributes: ['id', 'brand_id', 'ip_address']
+    });
+
+    if (!visitor) {
+      return res.status(404).json({ success: false, message: 'Visitor not found' });
+    }
+
+    // REQUIRED: Check if visitor belongs to agent's assigned brands
+    if (assignedBrandIds.length === 0) {
+      return res.status(403).json({ success: false, message: 'Access denied: No brand assignments' });
+    }
+    
+    if (!assignedBrandIds.includes(visitor.brand_id)) {
+      return res.status(403).json({ success: false, message: 'Access denied: Visitor not in assigned brands' });
+    }
+
+    // Check if visitor has an IP address
+    if (!visitor.ip_address || visitor.ip_address === 'Unknown') {
+      return res.status(400).json({ success: false, message: 'Visitor IP address is not available' });
+    }
+
+    // Check if IP is already banned
+    const existingBan = await BannedIP.findOne({
+      where: {
+        ip_address: visitor.ip_address,
+        tenant_id: tenantId,
+        is_active: true
+      }
+    });
+
+    if (existingBan) {
+      return res.status(400).json({ success: false, message: 'IP address is already banned' });
+    }
+
+    // Create ban record
+    const bannedIP = await BannedIP.create({
+      ip_address: visitor.ip_address,
+      tenant_id: tenantId,
+      banned_by: agentId,
+      reason: reason || `Banned by agent for visitor ${visitor.id}`,
+      is_active: true
+    });
+
+    // Invalidate cache for this tenant and IP
+    await invalidateBannedIPCache(tenantId, visitor.ip_address);
+
+    // Deactivate the visitor
+    await visitor.update({
+      is_active: false,
+      status: 'offline'
+    });
+
+    // Store system message in database
+    await VisitorMessage.create({
+      visitor_id: id,
+      tenant_id: tenantId,
+      sender_type: 'system',
+      sender_name: 'System',
+      message: `Visitor has been banned by agent. IP address: ${visitor.ip_address}`,
+      message_type: 'system',
+      is_read: false,
+      metadata: {
+        event_type: 'visitor_banned',
+        banned_by: agentId,
+        ip_address: visitor.ip_address,
+        reason: reason
+      }
+    });
+
+    // Emit socket event to notify widget that visitor is banned
+    const io = req.app.get('io');
+    if (io) {
+      const banData = {
+        visitorId: id,
+        tenantId: tenantId,
+        ipAddress: visitor.ip_address,
+        banned: true
+      };
+      // Send to specific visitor room
+      io.to(`visitor_${id}`).emit('visitor:banned', banData);
+      
+      // Send to agent dashboard for monitoring
+      io.to(`tenant_${tenantId}`).emit('visitor:banned', banData);
+    }
+
+    res.json({
+      success: true,
+      message: 'Visitor banned successfully',
+      data: {
+        visitorId: id,
+        ipAddress: visitor.ip_address,
+        bannedIP: bannedIP
+      }
+    });
+  } catch (error) {
+    console.error('Ban visitor error:', error);
+    res.status(500).json({ success: false, message: 'Failed to ban visitor' });
+  }
+});
+
+// Get all banned IPs for the tenant
+router.get('/banned-ips', authenticateToken, requireAgent, requireTenant, async (req, res) => {
+  try {
+    const tenantId = req.user.tenant_id;
+    
+    const bannedIPs = await BannedIP.findAll({
+      where: {
+        tenant_id: tenantId,
+        is_active: true
+      },
+      include: [
+        {
+          model: User,
+          as: 'bannedBy',
+          attributes: ['id', 'name', 'email'],
+          required: false
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    res.json({
+      success: true,
+      data: bannedIPs
+    });
+  } catch (error) {
+    console.error('Get banned IPs error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch banned IPs' });
+  }
+});
+
+// Unban IP address
+router.post('/banned-ips/:id/unban', authenticateToken, requireAgent, requireTenant, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tenantId = req.user.tenant_id;
+
+    // Find the banned IP
+    const bannedIP = await BannedIP.findOne({
+      where: {
+        id: id,
+        tenant_id: tenantId
+      }
+    });
+
+    if (!bannedIP) {
+      return res.status(404).json({ success: false, message: 'Banned IP record not found' });
+    }
+
+    // Deactivate the ban
+    await bannedIP.update({
+      is_active: false
+    });
+
+    // Invalidate cache for this tenant and IP
+    await invalidateBannedIPCache(tenantId, bannedIP.ip_address);
+
+    // Reactivate any visitors with this IP address
+    const visitorsWithIP = await Visitor.findAll({
+      where: {
+        tenant_id: tenantId,
+        ip_address: bannedIP.ip_address,
+        is_active: false
+      }
+    });
+
+    if (visitorsWithIP.length > 0) {
+      await Visitor.update(
+        {
+          is_active: true,
+          status: 'idle'
+        },
+        {
+          where: {
+            tenant_id: tenantId,
+            ip_address: bannedIP.ip_address,
+            is_active: false
+          }
+        }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'IP address unbanned successfully',
+      data: {
+        id: bannedIP.id,
+        ip_address: bannedIP.ip_address,
+        visitorsReactivated: visitorsWithIP.length
+      }
+    });
+  } catch (error) {
+    console.error('Unban IP error:', error);
+    res.status(500).json({ success: false, message: 'Failed to unban IP address' });
   }
 });
 
@@ -1413,6 +1999,50 @@ router.get('/agents/status', authenticateToken, requireAgent, requireTenant, asy
   } catch (error) {
     console.error('Get agents status error:', error);
     res.status(500).json({ success: false, message: 'Failed to get agents status' });
+  }
+});
+
+// Get list of agents for transfer (available to agents)
+router.get('/agents/list', authenticateToken, requireAgent, requireTenant, async (req, res) => {
+  try {
+    const agents = await User.findAll({
+      where: { 
+        tenant_id: req.user.tenant_id,
+        role: 'agent',
+        status: 'active'
+      },
+      attributes: ['id', 'name', 'email', 'avatar', 'department_id'],
+      order: [['name', 'ASC']]
+    });
+    
+    // Get departments for agents that have department_id
+    const departmentIds = [...new Set(agents.filter(a => a.department_id).map(a => a.department_id))];
+    const departments = departmentIds.length > 0 ? await Department.findAll({
+      where: { id: { [Op.in]: departmentIds } },
+      attributes: ['id', 'name']
+    }) : [];
+    
+    const departmentMap = {};
+    departments.forEach(dept => {
+      departmentMap[dept.id] = dept;
+    });
+    
+    res.json({
+      success: true,
+      data: agents.map(agent => ({
+        id: agent.id,
+        name: agent.name,
+        email: agent.email,
+        avatar: agent.avatar,
+        department: agent.department_id && departmentMap[agent.department_id] 
+          ? { id: departmentMap[agent.department_id].id, name: departmentMap[agent.department_id].name }
+          : null
+      }))
+    });
+    
+  } catch (error) {
+    console.error('Get agents list error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get agents list' });
   }
 });
 
@@ -1815,6 +2445,156 @@ router.post('/triggers/search', authenticateToken, requireAgent, requireTenant, 
     res.status(500).json({
       success: false,
       message: 'Failed to search triggers'
+    });
+  }
+});
+
+// Get visitor history - visitors who have completed chats or are offline
+router.get('/visitor-history', authenticateToken, requireAgent, requireTenant, async (req, res) => {
+  try {
+    const tenantId = req.user.tenant_id;
+    const agentId = req.user.id;
+    const { 
+      page = 1, 
+      limit = 50, 
+      status = 'all',
+      search = ''
+    } = req.query;
+    
+    const offset = (page - 1) * limit;
+    
+    // Get visitors for history (offline visitors who had interactions)
+    // Only show visitors who have had some interaction AND are now offline
+    let whereClause = {
+      tenant_id: tenantId,
+      [Op.and]: [
+        { [Op.or]: ['offline', 'idle'].map(s => ({ status: s })) },
+        { [Op.or]: [
+          { messages_count: { [Op.gt]: 0 } },
+          { assigned_agent_id: { [Op.ne]: null } }
+        ]}
+      ]
+    };
+
+    // Filter based on status param
+    if (status === 'completed') {
+      // Only show visitors who completed a chat with an agent
+      whereClause.assigned_agent_id = { [Op.ne]: null };
+    }
+
+    // Get agent's assigned brands - REQUIRED for agents
+    const assignedBrands = await BrandAgent.findAll({
+      where: {
+        agent_id: agentId,
+        status: 'active'
+      },
+      attributes: ['brand_id']
+    });
+
+    const assignedBrandIds = assignedBrands.map(ba => ba.brand_id);
+
+    // If agent has no brand assignments, return empty list (security: don't show any visitors)
+    if (assignedBrandIds.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          total: 0,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: 0
+        }
+      });
+    }
+
+    // REQUIRED: Only show visitors from assigned brands
+    whereClause.brand_id = { [Op.in]: assignedBrandIds };
+
+    // Get all banned IPs for this tenant (cached)
+    const bannedIPAddresses = await getBannedIPsForTenant(tenantId);
+
+    // Exclude visitors with banned IPs
+    if (bannedIPAddresses.length > 0) {
+      whereClause.ip_address = {
+        [Op.notIn]: bannedIPAddresses,
+        [Op.ne]: null,
+        [Op.ne]: 'Unknown'
+      };
+    }
+
+    const { count, rows: visitors } = await Visitor.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: 'assignedAgent',
+          attributes: ['id', 'name', 'avatar'],
+          required: false
+        },
+        {
+          model: Brand,
+          as: 'brand',
+          attributes: ['id', 'name', 'primary_color'],
+          required: false
+        }
+      ],
+      order: [['last_activity', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+
+    // Apply search filter if provided
+    let filteredVisitors = visitors;
+    if (search) {
+      const searchTerm = search.toLowerCase();
+      filteredVisitors = visitors.filter(visitor => 
+        visitor.name.toLowerCase().includes(searchTerm) ||
+        visitor.email?.toLowerCase().includes(searchTerm) ||
+        visitor.current_page?.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Transform visitors to include brandName for easier frontend access
+    const transformedVisitors = filteredVisitors.map(visitor => {
+      const visitorData = visitor.toJSON();
+      const metadata = visitorData.metadata || {};
+      
+      return {
+        ...visitorData,
+        brandName: visitor.brand?.name || 'No Brand',
+        rating: metadata.rating || null,
+        ratingFeedback: metadata.feedback || null,
+        // Map field names
+        currentPage: visitor.current_page || visitor.currentPage || 'Unknown page',
+        lastActivity: visitor.last_activity || visitor.lastActivity,
+        sessionDuration: visitor.session_duration ? visitor.session_duration.toString() : visitor.sessionDuration || '0',
+        messagesCount: visitor.messages_count || visitor.messagesCount || 0,
+        visitsCount: visitor.visits_count || visitor.visitsCount || 1,
+        createdAt: visitor.created_at || visitor.createdAt,
+        referrer: visitor.referrer || 'Direct',
+        location: visitor.location || { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+        device: visitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' }
+      };
+    });
+
+    res.json({
+      success: true,
+      data: transformedVisitors,
+      pagination: {
+        total: count,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(count / limit)
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get visitor history error:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Failed to fetch visitor history',
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });

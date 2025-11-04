@@ -20,6 +20,7 @@ const WidgetKey = require('./WidgetKey');
 const Brand = require('./Brand');
 const BrandAgent = require('./BrandAgent');
 const EmailTemplate = require('./EmailTemplate');
+const BannedIP = require('./BannedIP');
 
 // Company relationships
 Company.hasMany(User, { foreignKey: 'tenant_id', as: 'users' });
@@ -34,6 +35,7 @@ Company.hasMany(VisitorMessage, { foreignKey: 'tenant_id', as: 'visitorMessages'
 Company.hasMany(VisitorActivity, { foreignKey: 'tenant_id', as: 'visitorActivities' });
 Company.hasMany(WidgetKey, { foreignKey: 'tenant_id', as: 'widgetKeys' });
 Company.hasMany(Brand, { foreignKey: 'tenant_id', as: 'brands' });
+Company.hasMany(BannedIP, { foreignKey: 'tenant_id', as: 'bannedIPs' });
 Company.belongsTo(Plan, { foreignKey: 'plan_id', as: 'plan' });
 
 // Plan relationships
@@ -56,6 +58,7 @@ User.hasMany(SystemSetting, { foreignKey: 'updated_by', as: 'updatedSettings' })
 User.hasMany(Visitor, { foreignKey: 'assigned_agent_id', as: 'assignedVisitors' });
 User.hasMany(VisitorMessage, { foreignKey: 'sender_id', as: 'visitorMessages' });
 User.hasMany(VisitorActivity, { foreignKey: 'visitor_id', as: 'visitorActivities' });
+User.hasMany(BannedIP, { foreignKey: 'banned_by', as: 'bannedIPs' });
 
 // Department relationships
 Department.belongsTo(Company, { foreignKey: 'tenant_id', as: 'company' });
@@ -149,6 +152,10 @@ User.belongsToMany(Brand, {
   as: 'assignedBrands' 
 });
 
+// BannedIP relationships
+BannedIP.belongsTo(Company, { foreignKey: 'tenant_id', as: 'company' });
+BannedIP.belongsTo(User, { foreignKey: 'banned_by', as: 'bannedBy' });
+
 // EmailTemplate relationships - remove for now to avoid FK constraint issues
 
 module.exports = {
@@ -173,5 +180,6 @@ module.exports = {
   WidgetKey,
   Brand,
   BrandAgent,
-  EmailTemplate
+  EmailTemplate,
+  BannedIP
 };

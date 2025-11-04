@@ -4,8 +4,13 @@ const nodemailer = require('nodemailer');
 const getSMTPSettings = async () => {
   try {
     const { SystemSetting } = require('../models');
+    const { Op } = require('sequelize');
     const settings = await SystemSetting.findAll({
-      where: { setting_key: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_secure'] }
+      where: { 
+        setting_key: { 
+          [Op.in]: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_secure', 'smtp_from_name'] 
+        } 
+      }
     });
 
     const settingsObj = {};
@@ -14,34 +19,60 @@ const getSMTPSettings = async () => {
     });
 
     // Use database settings if available, otherwise fall back to environment variables
-    return {
+    const config = {
       host: settingsObj.smtp_host || process.env.EMAIL_HOST,
       port: parseInt(settingsObj.smtp_port || process.env.EMAIL_PORT || 587),
-      secure: settingsObj.smtp_secure === 'true',
+      secure: settingsObj.smtp_secure === 'true' || process.env.EMAIL_PORT == 465,
       auth: {
         user: settingsObj.smtp_user || process.env.EMAIL_USER,
         pass: settingsObj.smtp_password || process.env.EMAIL_PASS
-      }
+      },
+      from_name: settingsObj.smtp_from_name || process.env.EMAIL_FROM_NAME || null
     };
+
+    // Validate that required fields are present
+    if (!config.host || !config.auth.user || !config.auth.pass) {
+      throw new Error('SMTP configuration is incomplete. Please check your email settings.');
+    }
+
+    return config;
   } catch (error) {
     console.error('Error fetching SMTP settings:', error);
     // Fall back to environment variables
-    return {
+    const config = {
       host: process.env.EMAIL_HOST,
       port: parseInt(process.env.EMAIL_PORT || 587),
       secure: process.env.EMAIL_PORT == 465,
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
-      }
+      },
+      from_name: process.env.EMAIL_FROM_NAME || null
     };
+
+    // Validate that required fields are present
+    if (!config.host || !config.auth.user || !config.auth.pass) {
+      throw new Error('SMTP configuration is incomplete. Please set EMAIL_HOST, EMAIL_USER, and EMAIL_PASS in your environment variables or database settings.');
+    }
+
+    return config;
   }
+};
+
+// Helper function to format the "from" field
+const formatFromAddress = (email, name) => {
+  if (name && name.trim()) {
+    // Format: "Name <email@example.com>"
+    return `${name.trim()} <${email}>`;
+  }
+  // If no name provided, just return the email
+  return email;
 };
 
 // Create email transporter
 const createTransporter = async () => {
   const smtpConfig = await getSMTPSettings();
-  return nodemailer.createTransporter(smtpConfig);
+  return nodemailer.createTransport(smtpConfig);
 };
 
 // Send verification email
@@ -52,7 +83,7 @@ const sendVerificationEmail = async (email, token) => {
     const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
 
     const mailOptions = {
-      from: smtpSettings.auth.user,
+      from: formatFromAddress(smtpSettings.auth.user, smtpSettings.from_name),
       to: email,
       subject: 'Verify Your Email - NxChat',
       html: `
@@ -87,7 +118,7 @@ const sendPasswordResetEmail = async (email, token) => {
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
 
     const mailOptions = {
-      from: smtpSettings.auth.user,
+      from: formatFromAddress(smtpSettings.auth.user, smtpSettings.from_name),
       to: email,
       subject: 'Reset Your Password - NxChat',
       html: `
@@ -121,7 +152,7 @@ const sendWelcomeEmail = async (email, name, role) => {
     const smtpSettings = await getSMTPSettings();
 
     const mailOptions = {
-      from: smtpSettings.auth.user,
+      from: formatFromAddress(smtpSettings.auth.user, smtpSettings.from_name),
       to: email,
       subject: 'Welcome to NxChat!',
       html: `
@@ -153,7 +184,7 @@ const sendNotificationEmail = async (email, subject, message, actionUrl = null) 
     const smtpSettings = await getSMTPSettings();
 
     const mailOptions = {
-      from: smtpSettings.auth.user,
+      from: formatFromAddress(smtpSettings.auth.user, smtpSettings.from_name),
       to: email,
       subject: subject,
       html: `
@@ -186,7 +217,7 @@ const sendChatAssignmentEmail = async (email, agentName, customerName) => {
     const smtpSettings = await getSMTPSettings();
 
     const mailOptions = {
-      from: smtpSettings.auth.user,
+      from: formatFromAddress(smtpSettings.auth.user, smtpSettings.from_name),
       to: email,
       subject: 'New Chat Assigned - NxChat',
       html: `
@@ -215,14 +246,26 @@ const sendChatAssignmentEmail = async (email, agentName, customerName) => {
 // Test email configuration
 const testEmailConfiguration = async (testEmail = null) => {
   try {
+    // First, validate SMTP settings
+    const smtpSettings = await getSMTPSettings();
+    
+    if (!smtpSettings.host || !smtpSettings.auth.user || !smtpSettings.auth.pass) {
+      return { 
+        success: false, 
+        message: 'SMTP configuration is incomplete. Please configure email settings first.' 
+      };
+    }
+
     const transporter = await createTransporter();
+    
+    // Verify connection
     await transporter.verify();
     console.log('Email configuration is valid');
     
     // If test email is provided, send a test email
     if (testEmail) {
       const mailOptions = {
-        from: (await getSMTPSettings()).auth.user,
+        from: formatFromAddress(smtpSettings.auth.user, smtpSettings.from_name),
         to: testEmail,
         subject: 'SMTP Configuration Test - NxChat',
         html: `
@@ -240,10 +283,13 @@ const testEmailConfiguration = async (testEmail = null) => {
       console.log(`Test email sent to ${testEmail}`);
     }
     
-    return { success: true, message: 'Email configuration is valid' };
+    return { success: true, message: testEmail ? `Test email sent successfully to ${testEmail}` : 'Email configuration is valid' };
   } catch (error) {
     console.error('Email configuration test failed:', error);
-    return { success: false, message: error.message };
+    return { 
+      success: false, 
+      message: error.message || 'Failed to test email configuration. Please check your SMTP settings.' 
+    };
   }
 };
 
@@ -256,7 +302,7 @@ const sendAgentInvitation = async (email, firstName, verificationToken, tempPass
     const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
 
     const mailOptions = {
-      from: smtpSettings.auth.user,
+      from: formatFromAddress(smtpSettings.auth.user, smtpSettings.from_name),
       to: email,
       subject: 'You\'ve been invited to join NxChat as an Agent',
       html: `
@@ -312,5 +358,7 @@ module.exports = {
   sendNotificationEmail,
   sendChatAssignmentEmail,
   sendAgentInvitation,
-  testEmailConfiguration
+  testEmailConfiguration,
+  getSMTPSettings,
+  createTransporter
 };

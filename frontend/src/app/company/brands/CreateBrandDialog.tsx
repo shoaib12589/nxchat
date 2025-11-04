@@ -46,9 +46,13 @@ export default function CreateBrandDialog({ open, onOpenChange, onBrandCreated }
       } else {
         toast.error(response.message || 'Failed to create brand');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating brand:', error);
-      toast.error('Failed to create brand');
+      if (error.response?.data?.limit_reached) {
+        toast.error(error.response.data.message || 'Brand limit reached');
+      } else {
+        toast.error(error.response?.data?.message || error.message || 'Failed to create brand');
+      }
     } finally {
       setLoading(false);
     }

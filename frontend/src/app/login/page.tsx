@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { MessageSquare, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { apiClient } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -22,6 +23,23 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
+  const [registrationEnabled, setRegistrationEnabled] = useState<boolean>(true);
+
+  // Check registration status
+  useEffect(() => {
+    const checkRegistrationStatus = async () => {
+      try {
+        const response = await apiClient.getRegistrationStatus();
+        setRegistrationEnabled(response.enabled);
+      } catch (error) {
+        console.error('Failed to check registration status:', error);
+        // On error, assume registration is enabled
+        setRegistrationEnabled(true);
+      }
+    };
+
+    checkRegistrationStatus();
+  }, []);
 
   // Redirect after successful login
   useEffect(() => {
@@ -205,17 +223,19 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            <div className="mt-6 text-center">
-              <p className="text-sm text-muted-foreground">
-                Don't have an account?{' '}
-                <Link
-                  href="/register"
-                  className="text-primary hover:underline font-medium"
-                >
-                  Sign up
-                </Link>
-              </p>
-            </div>
+            {registrationEnabled && (
+              <div className="mt-6 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Don't have an account?{' '}
+                  <Link
+                    href="/register"
+                    className="text-primary hover:underline font-medium"
+                  >
+                    Sign up
+                  </Link>
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

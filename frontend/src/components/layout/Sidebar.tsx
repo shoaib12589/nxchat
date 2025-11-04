@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/stores/authStore';
@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { AgentStatusIndicator } from './AgentStatusIndicator';
 import { PackageUsage } from './PackageUsage';
+import apiClient from '@/lib/api';
 import {
   LayoutDashboard,
   Building2,
@@ -19,7 +20,6 @@ import {
   Settings,
   BarChart3,
   CreditCard,
-  Bot,
   Zap,
   ChevronRight,
   Tag,
@@ -28,6 +28,7 @@ import {
   Mail,
   ChevronDown,
   FileText,
+  ShieldOff
 } from 'lucide-react';
 
 interface NavItem {
@@ -143,14 +144,12 @@ const navigationItems: NavItem[] = [
     href: '/company/agents',
     icon: Users,
     roles: ['company_admin'],
-    features: ['user_management'],
   },
   {
     title: 'Departments',
     href: '/company/departments',
     icon: Building2,
     roles: ['company_admin'],
-    features: ['user_management'],
   },
   {
     title: 'Brands',
@@ -159,22 +158,11 @@ const navigationItems: NavItem[] = [
     roles: ['company_admin'],
   },
   {
-    title: 'Widget Settings',
-    href: '/company/widget',
-    icon: Bot,
-    roles: ['company_admin'],
-  },
-  {
     title: 'AI Training',
     href: '/company/ai-training',
     icon: Brain,
     roles: ['company_admin'],
-  },
-  {
-    title: 'Chats Monitoring',
-    href: '/company/chats-monitoring',
-    icon: MessageSquare,
-    roles: ['company_admin'],
+    features: ['ai_enabled'], // Only show if AI is enabled
   },
   {
     title: 'Company Analytics',
@@ -208,6 +196,12 @@ const navigationItems: NavItem[] = [
     roles: ['agent'],
   },
   {
+    title: 'Banned Visitors',
+    href: '/agent/banned-visitors',
+    icon: ShieldOff,
+    roles: ['agent'],
+  },
+  {
     title: 'Tickets',
     href: '/agent/tickets',
     icon: Ticket,
@@ -230,6 +224,7 @@ const navigationItems: NavItem[] = [
 export const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [appLogo, setAppLogo] = useState<string | null>(null);
   const { user } = useAuthStore();
   const { hasAccess, loading: featureLoading } = useFeatureAccess();
   const [expandedMenus, setExpandedMenus] = useState<string[]>(['Email Templates']); // Default to expanded
@@ -277,7 +272,7 @@ export const Sidebar: React.FC = () => {
             ['Agents', 'Departments', 'Brands'].includes(item.title)
           )},
           { title: 'Configuration', items: filteredItems.filter(item => 
-            ['Widget Settings', 'AI Training', 'Chats Monitoring'].includes(item.title)
+            ['AI Training'].includes(item.title)
           )},
           { title: 'Analytics', items: filteredItems.filter(item => 
             ['Company Analytics'].includes(item.title)
@@ -286,7 +281,7 @@ export const Sidebar: React.FC = () => {
       case 'agent':
         return [
           { title: 'Work', items: filteredItems.filter(item => 
-            ['Home', 'Chats', 'Visitors', 'History', 'Tickets', 'Triggers'].includes(item.title)
+            ['Home', 'Chats', 'Visitors', 'History', 'Banned Visitors', 'Tickets', 'Triggers'].includes(item.title)
           )},
           { title: 'Settings', items: filteredItems.filter(item => 
             ['Agent Settings'].includes(item.title)
@@ -298,6 +293,21 @@ export const Sidebar: React.FC = () => {
   };
 
   const roleBasedItems = getRoleBasedItems();
+
+  // Fetch app logo from system settings
+  useEffect(() => {
+    const fetchAppLogo = async () => {
+      try {
+        const response = await apiClient.getSystemSettings();
+        if (response.success && response.data?.app_logo) {
+          setAppLogo(response.data.app_logo);
+        }
+      } catch (error) {
+        console.error('Failed to fetch app logo:', error);
+      }
+    };
+    fetchAppLogo();
+  }, []);
 
   // Show loading state while checking feature access
   if (featureLoading && user.role === 'company_admin') {
@@ -315,8 +325,30 @@ export const Sidebar: React.FC = () => {
       {/* Logo Section */}
       <div className="px-8 pt-8 pb-12">
         <div className="flex items-center gap-3">
-          <MessageSquare className="w-8 h-8 text-white" />
-          <span className="text-2xl font-bold text-white">NxChat</span>
+          {appLogo ? (
+            <>
+              <img
+                src={appLogo}
+                alt="App Logo"
+                className="h-8 w-auto object-contain max-w-[200px]"
+                onError={(e) => {
+                  // Fallback to icon if image fails to load
+                  e.currentTarget.style.display = 'none';
+                  const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                  if (fallback) fallback.style.display = 'flex';
+                }}
+              />
+              <div className="flex items-center gap-3 hidden">
+                <MessageSquare className="w-8 h-8 text-white" />
+                <span className="text-2xl font-bold text-white">NxChat</span>
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center gap-3">
+              <MessageSquare className="w-8 h-8 text-white" />
+              <span className="text-2xl font-bold text-white">NxChat</span>
+            </div>
+          )}
         </div>
       </div>
       

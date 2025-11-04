@@ -7,6 +7,7 @@ import { SocketProvider } from '@/contexts/SocketContext';
 import { Toaster } from '@/components/ui/sonner';
 import { AuthInitializer } from '@/components/AuthInitializer';
 import { ClientOnly } from '@/components/ClientOnly';
+import { FaviconUpdater } from '@/components/FaviconUpdater';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -30,6 +31,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <ClientOnly>
+            <FaviconUpdater />
             <AuthInitializer />
             <SocketProvider>
               {children}

@@ -8,7 +8,7 @@ const chatSocket = (io, socket) => {
   // Get current user from socket (set by centralized auth)
   currentUser = socket.currentUser;
 
-  // Handle visitor room joining (for widget)
+  // Handle visitor room joining (for widget and agents)
   socket.on('join_visitor_room', (data) => {
     try {
       const { visitorId } = data;
@@ -22,7 +22,9 @@ const chatSocket = (io, socket) => {
       // Join visitor-specific room
       const roomName = `visitor_${visitorId}`;
       socket.join(roomName);
-      console.log(`Widget joined visitor room: ${roomName}`);
+      const userRole = currentUser?.role || 'unknown';
+      const userName = currentUser?.name || socket.id;
+      console.log(`${userRole} ${userName} joined visitor room: ${roomName}`);
       
       socket.emit('visitor_room_joined', { 
         success: true, 
@@ -48,10 +50,13 @@ const chatSocket = (io, socket) => {
       
       console.log(`Widget status update: visitor_${visitorId} is ${status}`);
       
-      // Update visitor's last widget interaction time in database
+      // Update visitor's last widget interaction time and status in database
       const { Visitor } = require('../models');
       await Visitor.update(
-        { last_widget_update: timestamp || new Date() },
+        { 
+          last_widget_update: timestamp || new Date(),
+          widget_status: status === 'minimized' ? 'minimized' : status === 'maximized' ? 'maximized' : null
+        },
         { 
           where: { 
             id: visitorId, 
@@ -60,13 +65,40 @@ const chatSocket = (io, socket) => {
         }
       );
       
+      // Store widget status as system message in database
+      let statusMessage = '';
+      if (status === 'maximized') {
+        statusMessage = 'Visitor reopened the chat window';
+      } else if (status === 'minimized') {
+        statusMessage = 'Visitor minimized the chat window';
+      } else {
+        statusMessage = `Widget status: ${status}`;
+      }
+
+      await VisitorMessage.create({
+        visitor_id: visitorId,
+        tenant_id: tenantId,
+        sender_type: 'system',
+        sender_name: 'System',
+        message: statusMessage,
+        message_type: 'system',
+        is_read: false,
+        metadata: {
+          event_type: 'widget_status',
+          status: status,
+          timestamp: timestamp
+        }
+      });
+
       // Broadcast widget status to all agents in the tenant
-      io.to(`tenant_${tenantId}`).emit('widget:status', {
+      const broadcastData = {
         visitorId: visitorId,
         tenantId: tenantId,
         status: status,
         timestamp: timestamp
-      });
+      };
+      console.log(`Broadcasting widget:status to tenant_${tenantId}:`, broadcastData);
+      io.to(`tenant_${tenantId}`).emit('widget:status', broadcastData);
       
     } catch (error) {
       console.error('Widget status error:', error);
@@ -203,6 +235,128 @@ const chatSocket = (io, socket) => {
     }
   });
 
+  // Handle visitor typing indicators (from widget)
+  socket.on('visitor:typing', async (data) => {
+    try {
+      const { visitorId, isTyping, timestamp } = data;
+      
+      if (!visitorId || typeof isTyping !== 'boolean') {
+        console.log('Invalid visitor typing data:', data);
+        return;
+      }
+
+      // Get visitor info to determine tenant
+      const visitor = await Visitor.findByPk(visitorId);
+      if (!visitor) {
+        console.log('Visitor not found for typing event:', visitorId);
+        return;
+      }
+
+      // Broadcast to all agents in the tenant
+      io.to(`tenant_${visitor.tenant_id}`).emit('visitor:typing', {
+        visitorId: visitorId.toString(),
+        isTyping: isTyping,
+        timestamp: timestamp || new Date().toISOString()
+      });
+
+      // Also emit to visitor chat room for agent chat page compatibility
+      io.to(`visitor_${visitorId}`).emit('visitor:chat:typing', {
+        visitorId: visitorId.toString(),
+        isTyping: isTyping
+      });
+
+      console.log(`Visitor ${visitorId} typing: ${isTyping}`);
+    } catch (error) {
+      console.error('Visitor typing error:', error);
+    }
+  });
+
+  // Handle visitor typing content (live preview)
+  socket.on('visitor:typing-content', async (data) => {
+    try {
+      const { visitorId, content, timestamp } = data;
+      
+      console.log('📥 [BACKEND] Received visitor:typing-content:', { visitorId, contentLength: content?.length || 0, hasContent: !!content });
+      
+      if (!visitorId || typeof content !== 'string') {
+        console.log('❌ [BACKEND] Invalid visitor typing content data:', data);
+        return;
+      }
+
+      // Get visitor info to determine tenant and brand
+      const visitor = await Visitor.findByPk(visitorId);
+      if (!visitor) {
+        console.log('❌ [BACKEND] Visitor not found for typing content event:', visitorId);
+        return;
+      }
+
+      console.log('✅ [BACKEND] Visitor found:', { id: visitor.id, brand_id: visitor.brand_id, tenant_id: visitor.tenant_id });
+
+      const typingContentData = {
+        visitorId: visitorId.toString(),
+        content: content,
+        timestamp: timestamp || new Date().toISOString()
+      };
+
+      // Broadcast typing content to brand-specific room so only assigned agents see it
+      if (visitor.brand_id) {
+        io.to(`brand_${visitor.brand_id}`).emit('visitor:typing-content', typingContentData);
+        console.log(`📤 [BACKEND] Emitted visitor:typing-content to brand room: brand_${visitor.brand_id}`, content ? `(${content.length} chars)` : '(cleared)');
+      } else {
+        // Fallback: if no brand, emit to tenant (shouldn't happen in production)
+        console.warn('⚠️ [BACKEND] Visitor has no brand_id, emitting typing content to tenant room as fallback');
+        io.to(`tenant_${visitor.tenant_id}`).emit('visitor:typing-content', typingContentData);
+      }
+
+      // Also emit to visitor-specific room for agent chat page compatibility
+      io.to(`visitor_${visitorId}`).emit('visitor:typing-content', typingContentData);
+      console.log(`📤 [BACKEND] Also emitted visitor:typing-content to visitor room: visitor_${visitorId}`);
+    } catch (error) {
+      console.error('❌ [BACKEND] Visitor typing content error:', error);
+    }
+  });
+
+  // Handle agent typing indicators (from agent dashboard)
+  socket.on('agent:typing', async (data) => {
+    try {
+      const { visitorId, isTyping } = data;
+      
+      if (!visitorId || typeof isTyping !== 'boolean') {
+        console.log('Invalid agent typing data:', data);
+        return;
+      }
+
+      if (!currentUser) {
+        console.log('Agent typing event but user not authenticated');
+        return;
+      }
+
+      // Verify agent has access to this visitor
+      const visitor = await Visitor.findByPk(visitorId);
+      if (!visitor) {
+        console.log('Visitor not found for agent typing event:', visitorId);
+        return;
+      }
+
+      // Check permissions - agent must be in same tenant
+      if (currentUser.tenant_id !== visitor.tenant_id && currentUser.role !== 'super_admin') {
+        console.log('Agent does not have access to visitor:', visitorId);
+        return;
+      }
+
+      // Broadcast agent typing to visitor
+      io.to(`visitor_${visitorId}`).emit('agent:typing', {
+        agentId: currentUser.id.toString(),
+        agentName: currentUser.name,
+        isTyping: isTyping
+      });
+
+      console.log(`Agent ${currentUser.name} typing to visitor ${visitorId}: ${isTyping}`);
+    } catch (error) {
+      console.error('Agent typing error:', error);
+    }
+  });
+
   // Mark messages as read (only for authenticated users)
   socket.on('mark_messages_read', async (data) => {
     try {
@@ -317,9 +471,12 @@ const chatSocket = (io, socket) => {
         return;
       }
 
-      // Update chat
+      // Update chat - use 'completed' status if chat was properly ended with rating
+      // Use 'closed' for chats ended without rating (just agent closing)
+      const chatStatus = rating ? 'completed' : 'closed';
+      
       await currentChat.update({
-        status: 'closed',
+        status: chatStatus,
         ended_at: new Date(),
         rating: rating,
         rating_feedback: feedback
@@ -436,6 +593,71 @@ const chatSocket = (io, socket) => {
   });
 
   // Handle disconnect
+  // Handle message seen status (when visitor views agent message)
+  socket.on('message:seen', async (data) => {
+    try {
+      const { visitorId, messageId, timestamp } = data;
+      
+      if (!visitorId || !messageId) {
+        console.log('❌ Invalid message seen data:', data);
+        return;
+      }
+      
+      console.log(`📬 Message seen: visitor_${visitorId} viewed message ${messageId}`);
+      
+      // Update message read status in database
+      const message = await VisitorMessage.findByPk(messageId);
+      if (message && message.sender_type === 'agent') {
+        await message.update({
+          is_read: true,
+          read_at: timestamp || new Date()
+        });
+        
+        console.log(`✅ Updated message ${messageId} read status in database`);
+        
+        // Get visitor's tenant_id and brand_id
+        const visitor = await Visitor.findByPk(visitorId, {
+          attributes: ['tenant_id', 'brand_id', 'assigned_agent_id']
+        });
+        
+        if (visitor) {
+          const seenData = {
+            visitorId: visitorId,
+            messageId: messageId.toString(), // Ensure string format for consistency
+            timestamp: timestamp || new Date().toISOString()
+          };
+          
+          console.log(`📤 Broadcasting message:seen to rooms:`, {
+            tenant: `tenant_${visitor.tenant_id}`,
+            brand: visitor.brand_id ? `brand_${visitor.brand_id}` : null,
+            agent: visitor.assigned_agent_id ? `agent_${visitor.assigned_agent_id}` : null,
+            user: visitor.assigned_agent_id ? `user_${visitor.assigned_agent_id}` : null
+          });
+          
+          // Emit to agents in tenant room
+          io.to(`tenant_${visitor.tenant_id}`).emit('message:seen', seenData);
+          
+          // Also emit to brand room if visitor has a brand
+          if (visitor.brand_id) {
+            io.to(`brand_${visitor.brand_id}`).emit('message:seen', seenData);
+          }
+          
+          // Emit to specific agent if assigned (use user room since agents join user_${id} on auth)
+          if (visitor.assigned_agent_id) {
+            // Emit to user room (agents join user_${id} on authentication)
+            io.to(`user_${visitor.assigned_agent_id}`).emit('message:seen', seenData);
+          }
+        } else {
+          console.log(`⚠️ Visitor ${visitorId} not found for message seen update`);
+        }
+      } else {
+        console.log(`⚠️ Message ${messageId} not found or is not an agent message`);
+      }
+    } catch (error) {
+      console.error('❌ Message seen error:', error);
+    }
+  });
+
   socket.on('disconnect', () => {
     if (currentUser) {
       console.log(`User ${currentUser.name} disconnected`);

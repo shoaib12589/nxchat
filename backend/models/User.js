@@ -42,8 +42,8 @@ const User = sequelize.define('User', {
     allowNull: false
   },
   avatar: {
-    type: DataTypes.STRING(500),
-    allowNull: true
+  type: DataTypes.TEXT,
+  allowNull: true
   },
   status: {
     type: DataTypes.ENUM('active', 'inactive', 'suspended'),
@@ -73,6 +73,15 @@ const User = sequelize.define('User', {
     allowNull: true
   },
   last_login: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  failed_login_attempts: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0
+  },
+  account_locked_until: {
     type: DataTypes.DATE,
     allowNull: true
   }

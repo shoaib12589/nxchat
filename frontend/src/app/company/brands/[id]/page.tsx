@@ -26,16 +26,20 @@ import {
   Bot,
   Users,
   Tag,
-  Code
+  Code,
+  Building2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiClient } from '@/lib/api';
 import { Brand, User, WidgetSetting } from '@/types';
+import { useFeatureAccess } from '@/hooks/useFeatureAccess';
 
 export default function BrandSettingsPage() {
   const params = useParams();
   const router = useRouter();
   const brandId = params.id as string;
+  const { hasAccess } = useFeatureAccess();
+  const hasAIEnabled = hasAccess('ai_enabled');
   
   const [brand, setBrand] = useState<Brand | null>(null);
   const [widgetSettings, setWidgetSettings] = useState<WidgetSetting | null>(null);
@@ -86,7 +90,9 @@ export default function BrandSettingsPage() {
 
     try {
       setSaving(true);
-      const response = await apiClient.updateBrand(brand.id, {
+      
+      // Save brand details
+      const brandResponse = await apiClient.updateBrand(brand.id, {
         name: brand.name,
         description: brand.description,
         logo: brand.logo,
@@ -95,14 +101,32 @@ export default function BrandSettingsPage() {
         status: brand.status
       });
       
-      if (response.success) {
-        toast.success('Brand updated successfully');
+      // Also save widget settings if they exist
+      let settingsResponse = null;
+      if (widgetSettings) {
+        console.log('Saving widget settings with brand:', {
+          ai_welcome_message: widgetSettings.ai_welcome_message,
+          has_ai_welcome_message: 'ai_welcome_message' in widgetSettings,
+          allKeys: Object.keys(widgetSettings)
+        });
+        
+        settingsResponse = await apiClient.updateWidgetSettings(widgetSettings);
+      }
+      
+      // Show appropriate success/error messages
+      if (brandResponse.success && (!settingsResponse || settingsResponse.success)) {
+        toast.success('Brand and widget settings saved successfully');
+        fetchBrandData(); // Refresh data
+      } else if (brandResponse.success && settingsResponse && !settingsResponse.success) {
+        toast.success('Brand saved, but widget settings update failed');
+      } else if (!brandResponse.success && settingsResponse && settingsResponse.success) {
+        toast.success('Widget settings saved, but brand update failed');
       } else {
-        toast.error(response.message || 'Failed to update brand');
+        toast.error(brandResponse.message || settingsResponse?.message || 'Failed to save settings');
       }
     } catch (error) {
-      console.error('Error updating brand:', error);
-      toast.error('Failed to update brand');
+      console.error('Error saving settings:', error);
+      toast.error('Failed to save settings');
     } finally {
       setSaving(false);
     }
@@ -113,10 +137,20 @@ export default function BrandSettingsPage() {
 
     try {
       setSaving(true);
+      
+      // Log what we're sending to debug
+      console.log('Saving widget settings:', {
+        ai_welcome_message: widgetSettings.ai_welcome_message,
+        has_ai_welcome_message: 'ai_welcome_message' in widgetSettings,
+        allKeys: Object.keys(widgetSettings)
+      });
+      
       const response = await apiClient.updateWidgetSettings(widgetSettings);
       
       if (response.success) {
         toast.success('Widget settings saved successfully');
+        // Refresh the data to get the latest from server
+        fetchBrandData();
       } else {
         toast.error(response.message || 'Failed to save widget settings');
       }
@@ -183,8 +217,21 @@ export default function BrandSettingsPage() {
   };
 
   const formatRole = (role: string | undefined | null): string => {
-    if (!role || typeof role !== 'string') return 'Unknown';
-    return role.replace('_', ' ');
+    if (!role || typeof role !== 'string') return 'Agent';
+    return role.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  };
+
+  const formatPresenceStatus = (status: string | undefined | null): { label: string; color: string } => {
+    switch (status) {
+      case 'online':
+        return { label: 'Online', color: 'bg-green-500' };
+      case 'away':
+        return { label: 'Away', color: 'bg-yellow-500' };
+      case 'invisible':
+        return { label: 'Offline', color: 'bg-gray-400' };
+      default:
+        return { label: 'Offline', color: 'bg-gray-400' };
+    }
   };
 
   if (loading) {
@@ -276,10 +323,12 @@ export default function BrandSettingsPage() {
 
       {/* Settings Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className={`grid w-full ${hasAIEnabled ? 'grid-cols-5' : 'grid-cols-4'}`}>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="behavior">Behavior</TabsTrigger>
-          <TabsTrigger value="ai">AI Settings</TabsTrigger>
+          {hasAIEnabled && (
+            <TabsTrigger value="ai">AI Settings</TabsTrigger>
+          )}
           <TabsTrigger value="agents">Agents</TabsTrigger>
           <TabsTrigger value="embed">Embed Code</TabsTrigger>
         </TabsList>
@@ -544,8 +593,9 @@ export default function BrandSettingsPage() {
           </div>
         </TabsContent>
 
-        {/* AI Settings */}
-        <TabsContent value="ai" className="space-y-6">
+        {/* AI Settings - Only show if AI is enabled */}
+        {hasAIEnabled && (
+          <TabsContent value="ai" className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
@@ -568,7 +618,14 @@ export default function BrandSettingsPage() {
                     </div>
                     <Switch
                       checked={widgetSettings.ai_enabled}
-                      onCheckedChange={(checked) => updateWidgetSetting('ai_enabled', checked)}
+                      onCheckedChange={(checked) => {
+                        if (checked && !hasAIEnabled) {
+                          toast.error('AI is not available in your current plan. Please upgrade to access AI features.');
+                          return;
+                        }
+                        updateWidgetSetting('ai_enabled', checked);
+                      }}
+                      disabled={!hasAIEnabled}
                     />
                   </div>
                   <div className="space-y-2">
@@ -579,6 +636,7 @@ export default function BrandSettingsPage() {
                       onChange={(e) => updateWidgetSetting('ai_personality', e.target.value)}
                       placeholder="You are a helpful customer service assistant..."
                       rows={4}
+                      disabled={!hasAIEnabled}
                     />
                   </div>
                   <div className="space-y-2">
@@ -589,9 +647,24 @@ export default function BrandSettingsPage() {
                       onChange={(e) => updateWidgetSetting('auto_transfer_keywords', e.target.value.split(',').map(k => k.trim()).filter(k => k))}
                       placeholder="urgent, billing, complaint"
                       rows={2}
+                      disabled={!hasAIEnabled}
                     />
                     <p className="text-sm text-muted-foreground">
                       Keywords that trigger automatic transfer to human agents
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ai_welcome_message">AI Welcome Message</Label>
+                    <Textarea
+                      id="ai_welcome_message"
+                      value={widgetSettings.ai_welcome_message || ''}
+                      onChange={(e) => updateWidgetSetting('ai_welcome_message', e.target.value)}
+                      placeholder="Hello! I'm your AI assistant. How can I help you today?"
+                      rows={3}
+                      disabled={!hasAIEnabled}
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      This message will be displayed in the chat widget when AI is enabled
                     </p>
                   </div>
                 </>
@@ -599,6 +672,7 @@ export default function BrandSettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+        )}
 
         {/* Agents */}
         <TabsContent value="agents" className="space-y-6">
@@ -613,45 +687,92 @@ export default function BrandSettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                {availableAgents.map((agent) => (
-                  <div key={agent.id} className="flex items-center space-x-3 p-3 border rounded-lg">
-                    <Checkbox
-                      id={`agent-${agent.id}`}
-                      checked={brand.agents?.some(a => a.id === agent.id) || false}
-                      onCheckedChange={(checked) => {
-                        const currentAgentIds = brand.agents?.map(a => a.id) || [];
-                        const newAgentIds = checked 
-                          ? [...currentAgentIds, agent.id]
-                          : currentAgentIds.filter(id => id !== agent.id);
-                        handleAssignAgents(newAgentIds);
-                      }}
-                    />
-                    <div className="flex items-center gap-3 flex-1">
-                      {agent.avatar ? (
-                        <img
-                          src={agent.avatar}
-                          alt={agent.name}
-                          className="w-8 h-8 rounded-full object-cover"
+              {availableAgents.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Users className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p className="font-medium mb-1">No agents available</p>
+                  <p className="text-sm">Create agents in the Agents section first.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {availableAgents.map((agent) => {
+                    const isAssigned = brand.agents?.some(a => a.id === agent.id) || false;
+                    const presenceStatus = formatPresenceStatus(agent.agent_presence_status || agent.status);
+                    
+                    return (
+                      <div 
+                        key={agent.id} 
+                        className={`flex items-center gap-4 p-4 border rounded-lg transition-all hover:shadow-md ${
+                          isAssigned ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent/50'
+                        }`}
+                      >
+                        <Checkbox
+                          id={`agent-${agent.id}`}
+                          checked={isAssigned}
+                          onCheckedChange={(checked) => {
+                            const currentAgentIds = brand.agents?.map(a => a.id) || [];
+                            const newAgentIds = checked 
+                              ? [...currentAgentIds, agent.id]
+                              : currentAgentIds.filter(id => id !== agent.id);
+                            handleAssignAgents(newAgentIds);
+                          }}
+                          className="mt-0"
                         />
-                      ) : (
-                        <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
-                          <span className="text-xs font-semibold">
-                            {agent.name.charAt(0).toUpperCase()}
-                          </span>
+                        <div className="relative">
+                          {agent.avatar ? (
+                            <img
+                              src={agent.avatar}
+                              alt={agent.name}
+                              className="w-12 h-12 rounded-full object-cover border-2 border-background"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center border-2 border-background">
+                              <span className="text-lg font-semibold text-primary">
+                                {agent.name.charAt(0).toUpperCase()}
+                              </span>
+                            </div>
+                          )}
+                          {/* Presence status indicator */}
+                          <div 
+                            className={`absolute bottom-0 right-0 w-3.5 h-3.5 ${presenceStatus.color} rounded-full border-2 border-background`} 
+                            title={presenceStatus.label}
+                          />
                         </div>
-                      )}
-                      <div className="flex-1">
-                        <div className="font-medium">{agent.name}</div>
-                        <div className="text-sm text-muted-foreground">{agent.email}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="font-semibold text-sm truncate">{agent.name}</div>
+                            {isAssigned && (
+                              <Badge variant="secondary" className="text-xs px-1.5 py-0">
+                                Assigned
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                            <span className="truncate">{agent.email}</span>
+                            {agent.department && (
+                              <>
+                                <span className="text-muted-foreground/50">•</span>
+                                <span className="flex items-center gap-1">
+                                  <Building2 className="w-3 h-3" />
+                                  {agent.department.name}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Badge 
+                            variant="outline" 
+                            className="text-xs capitalize"
+                          >
+                            {formatRole(agent.role)}
+                          </Badge>
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground capitalize">
-                        {formatRole(agent.role)}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

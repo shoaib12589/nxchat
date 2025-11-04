@@ -80,7 +80,11 @@ export default function DepartmentsPage() {
         fetchDepartments();
       }
     } catch (error: any) {
-      toast.error(error.message || 'Failed to create department');
+      if (error.response?.data?.limit_reached) {
+        toast.error(error.response.data.message || 'Department limit reached');
+      } else {
+        toast.error(error.message || 'Failed to create department');
+      }
     } finally {
       setSubmitting(false);
     }

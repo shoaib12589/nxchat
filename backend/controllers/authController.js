@@ -133,6 +133,12 @@ const login = async (req, res) => {
     const { email, password } = req.body;
     console.log('Login attempt for email:', email);
 
+    // Get max login attempts setting
+    const maxAttemptsSetting = await SystemSetting.findOne({
+      where: { setting_key: 'max_login_attempts' }
+    });
+    const maxLoginAttempts = maxAttemptsSetting ? parseInt(maxAttemptsSetting.value) : 5;
+
     // Find user with company info
     const user = await User.findOne({
       where: { email },
@@ -160,16 +166,68 @@ const login = async (req, res) => {
       });
     }
 
+    // Check if account is locked
+    if (user.account_locked_until && new Date(user.account_locked_until) > new Date()) {
+      const lockUntil = new Date(user.account_locked_until);
+      const minutesRemaining = Math.ceil((lockUntil - new Date()) / (1000 * 60));
+      console.log('Account locked for user:', email, 'until:', lockUntil);
+      return res.status(423).json({
+        success: false,
+        message: `Account is locked due to too many failed login attempts. Please try again in ${minutesRemaining} minute(s).`,
+        account_locked: true,
+        locked_until: lockUntil
+      });
+    }
+
+    // Reset lock if it has expired
+    if (user.account_locked_until && new Date(user.account_locked_until) <= new Date()) {
+      await user.update({
+        failed_login_attempts: 0,
+        account_locked_until: null
+      });
+      user.failed_login_attempts = 0;
+      user.account_locked_until = null;
+    }
+
     // Check password
     const isPasswordValid = await user.comparePassword(password);
     console.log('Password valid:', isPasswordValid);
     
     if (!isPasswordValid) {
       console.log('Invalid password for user:', email);
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password'
-      });
+      
+      // Increment failed login attempts
+      const newFailedAttempts = (user.failed_login_attempts || 0) + 1;
+      let lockUntil = null;
+      
+      // Lock account if max attempts reached
+      if (newFailedAttempts >= maxLoginAttempts) {
+        // Lock for 30 minutes
+        lockUntil = new Date(Date.now() + 30 * 60 * 1000);
+        await user.update({
+          failed_login_attempts: newFailedAttempts,
+          account_locked_until: lockUntil
+        });
+        
+        return res.status(423).json({
+          success: false,
+          message: `Too many failed login attempts. Account has been locked for 30 minutes.`,
+          account_locked: true,
+          locked_until: lockUntil,
+          attempts_remaining: 0
+        });
+      } else {
+        await user.update({
+          failed_login_attempts: newFailedAttempts
+        });
+        
+        const attemptsRemaining = maxLoginAttempts - newFailedAttempts;
+        return res.status(401).json({
+          success: false,
+          message: `Invalid email or password. ${attemptsRemaining} attempt(s) remaining before account lock.`,
+          attempts_remaining: attemptsRemaining
+        });
+      }
     }
 
     // Check maintenance mode (only for non-super admin users)
@@ -214,10 +272,29 @@ const login = async (req, res) => {
       });
     }
 
+    // Check Two-Factor Authentication requirement
+    const twoFactorSetting = await SystemSetting.findOne({
+      where: { setting_key: 'enable_two_factor' }
+    });
+    
+    const requireTwoFactor = twoFactorSetting ? twoFactorSetting.value === 'true' : false;
+    
+    if (requireTwoFactor) {
+      // Check if user has 2FA enabled (this would need to be checked against user's 2FA settings)
+      // For now, we'll just log it - full 2FA implementation would require additional fields and logic
+      console.log('Two-factor authentication is required for user:', email);
+      // Note: Full 2FA implementation would require checking user's 2FA status and prompting for code
+    }
+
     console.log('All checks passed, generating tokens...');
 
+    // Reset failed login attempts on successful login
     // Update last login
-    await user.update({ last_login: new Date() });
+    await user.update({ 
+      last_login: new Date(),
+      failed_login_attempts: 0,
+      account_locked_until: null
+    });
 
     // Generate tokens
     const { accessToken, refreshToken } = await generateTokens(user);

@@ -16,7 +16,10 @@ import {
   Eye,
   Clock,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  RefreshCw,
+  Bot,
+  AlertTriangle
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import apiClient from '@/lib/api';
@@ -32,33 +35,50 @@ export default function CompanyDashboard() {
 
   useEffect(() => {
     fetchDashboardData();
+    
+    // Set up real-time updates (poll every 30 seconds - silent refresh)
+    const interval = setInterval(() => {
+      fetchDashboardData(false); // Silent refresh without loading indicator
+    }, 30000);
+
+    return () => clearInterval(interval);
   }, []);
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = async (showLoading = true) => {
     try {
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
       const response = await apiClient.getCompanyDashboard();
       
       if (response.success) {
         setStats(response.data);
-        setRecentChats(response.data.recentChats || []);
-        setRecentTickets(response.data.recentTickets || []);
+        const chats = response.data.recentChats || [];
+        const tickets = response.data.recentTickets || [];
+        setRecentChats(chats);
+        setRecentTickets(tickets);
+        setError(null);
+      } else {
+        setError(response.message || 'Failed to fetch dashboard data');
       }
     } catch (error: any) {
       setError(error.message || 'Failed to fetch dashboard data');
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   };
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
+    switch (status?.toLowerCase()) {
       case 'active':
         return <Badge variant="default">Active</Badge>;
       case 'waiting':
         return <Badge variant="secondary">Waiting</Badge>;
       case 'closed':
-        return <Badge variant="outline">Closed</Badge>;
+      case 'completed':
+        return <Badge variant="outline" className="bg-gray-100 text-gray-700">Completed</Badge>;
       case 'open':
         return <Badge variant="default">Open</Badge>;
       case 'pending':
@@ -66,7 +86,7 @@ export default function CompanyDashboard() {
       case 'resolved':
         return <Badge variant="outline">Resolved</Badge>;
       default:
-        return <Badge variant="secondary">{status}</Badge>;
+        return <Badge variant="secondary">{status || 'Unknown'}</Badge>;
     }
   };
 
@@ -89,39 +109,52 @@ export default function CompanyDashboard() {
     {
       key: 'customer',
       title: 'Customer',
-      render: (value: any, chat: Chat) => (
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
-            <Users className="w-4 h-4 text-primary" />
-          </div>
-          <div>
-            <div className="font-medium">
-              {chat.customer?.name}
+      render: (value: any, chat: Chat) => {
+        // Use customer from User model if available, otherwise use customer_name/customer_email from Chat
+        const customerName = chat.customer?.name || (chat as any).customer_name || 'Unknown';
+        const customerEmail = chat.customer?.email || (chat as any).customer_email || '-';
+        
+        return (
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0">
+              <Users className="w-4 h-4 text-gray-600" />
             </div>
-            <div className="text-sm text-muted-foreground">{chat.customer?.email}</div>
+            <div>
+              <div className="font-medium text-sm text-gray-900">
+                {customerName}
+              </div>
+              <div className="text-xs text-gray-500">{customerEmail}</div>
+            </div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
     {
       key: 'status',
       title: 'Status',
-      render: (value: string) => getStatusBadge(value),
-    },
-    {
-      key: 'priority',
-      title: 'Priority',
-      render: (value: string) => getPriorityBadge(value),
+      render: (value: string, chat: Chat) => getStatusBadge(chat.status || value || 'waiting'),
     },
     {
       key: 'agent',
       title: 'Agent',
-      render: (value: any) => value ? value.name : 'Unassigned',
+      render: (value: any, chat: Chat) => chat.agent ? chat.agent.name : 'Unassigned',
     },
     {
-      key: 'created_at',
+      key: 'started_at',
       title: 'Started',
-      render: (value: string) => new Date(value).toLocaleDateString(),
+      render: (value: any, chat: Chat) => {
+        const dateStr = chat.started_at || chat.created_at;
+        if (!dateStr) return '-';
+        const date = new Date(dateStr);
+        return date.toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
+        });
+      },
     },
   ];
 
@@ -185,27 +218,39 @@ export default function CompanyDashboard() {
 
   return (
     <div className="space-y-8 relative">
-      {/* Animated background gradient */}
-      <div className="absolute inset-0 bg-[#EEF4ED] -z-10" />
-      
       {/* Header */}
       <motion.div 
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2 }}
-        className="flex items-center justify-between backdrop-blur-xl bg-white/50 dark:bg-gray-900/50 rounded-2xl p-6 border border-white/20 shadow-lg"
+        className="flex items-center justify-between bg-white rounded-lg p-6 border border-gray-200 shadow-sm"
       >
         <div>
-          <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
-            Dashboard
-          </h1>
+          <div className="flex items-center space-x-3">
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900">
+              Dashboard
+            </h1>
+            <div className="flex items-center space-x-2 text-xs text-muted-foreground">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+              <span>Live</span>
+            </div>
+          </div>
           <p className="text-muted-foreground mt-2">
-            Overview of your company's support activity
+            Overview of your company's support activity • Updates every 30 seconds
           </p>
         </div>
         <div className="flex items-center space-x-3">
+          <Button 
+            variant="outline" 
+            onClick={() => fetchDashboardData(true)}
+            disabled={loading}
+            size="sm"
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
           <Link href="/company/analytics">
-            <Button variant="outline" className="backdrop-blur-sm bg-white/70 dark:bg-gray-800/70 border-white/20 hover:bg-white/90">
+            <Button variant="outline" size="sm">
               <Eye className="w-4 h-4 mr-2" />
               View Analytics
             </Button>
@@ -214,49 +259,39 @@ export default function CompanyDashboard() {
       </motion.div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard
           title="Total Agents"
           value={stats?.totalAgents || 0}
           icon={Users}
-          trend={{
-            value: 5,
-            label: 'this month',
-            isPositive: true,
-          }}
           delay={0}
         />
         <StatsCard
           title="Active Chats"
           value={stats?.activeChats || 0}
           icon={MessageSquare}
-          trend={{
-            value: -2,
-            label: 'vs yesterday',
-            isPositive: false,
-          }}
+          trend={stats?.trends?.chats ? {
+            value: Math.abs(stats.trends.chats),
+            label: 'vs last month',
+            isPositive: stats.trends.chats > 0,
+          } : undefined}
           delay={0.1}
         />
         <StatsCard
           title="Total Tickets"
           value={stats?.totalTickets || 0}
           icon={Ticket}
-          trend={{
-            value: 12,
-            label: 'this week',
-            isPositive: true,
-          }}
+          trend={stats?.trends?.tickets ? {
+            value: Math.abs(stats.trends.tickets),
+            label: 'vs last month',
+            isPositive: stats.trends.tickets > 0,
+          } : undefined}
           delay={0.2}
         />
         <StatsCard
           title="Total Messages"
           value={stats?.totalMessages || 0}
           icon={TrendingUp}
-          trend={{
-            value: 8,
-            label: 'this month',
-            isPositive: true,
-          }}
           delay={0.3}
         />
       </div>
@@ -269,10 +304,10 @@ export default function CompanyDashboard() {
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.3, delay: 0.1 }}
         >
-          <Card className="backdrop-blur-xl bg-white/70 dark:bg-gray-900/70 border-white/20 shadow-xl hover:shadow-2xl transition-all duration-300">
+          <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">
             <CardHeader>
-              <CardTitle className="text-2xl">Recent Chats</CardTitle>
-              <CardDescription>
+              <CardTitle className="text-base">Recent Chats</CardTitle>
+              <CardDescription className="text-sm">
                 Latest customer conversations
               </CardDescription>
             </CardHeader>
@@ -302,7 +337,7 @@ export default function CompanyDashboard() {
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.3, delay: 0.15 }}
         >
-          <Card className="backdrop-blur-xl bg-white/70 dark:bg-gray-900/70 border-white/20 shadow-xl hover:shadow-2xl transition-all duration-300">
+          <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">
             <CardHeader>
               <CardTitle className="text-2xl">Recent Tickets</CardTitle>
               <CardDescription>
@@ -338,25 +373,19 @@ export default function CompanyDashboard() {
           transition={{ duration: 0.3, delay: 0.2 }}
           whileHover={{ scale: 1.01 }}
         >
-          <Card className="backdrop-blur-xl bg-gradient-to-br from-white/80 to-white/60 dark:from-gray-800/80 dark:to-gray-700/60 border-white/20 shadow-xl hover:shadow-2xl transition-all duration-300 group overflow-hidden relative">
-            <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 via-transparent to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-            <CardHeader className="relative z-10">
-              <CardTitle className="flex items-center space-x-2 text-lg">
-                <motion.div
-                  whileHover={{ rotate: 360 }}
-                  transition={{ duration: 0.6 }}
-                >
-                  <Users className="w-5 h-5 text-blue-600" />
-                </motion.div>
+          <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2 text-base">
+                <Users className="w-5 h-5 text-gray-700" />
                 <span>Manage Agents</span>
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-sm">
                 Add, edit, and manage your support agents
               </CardDescription>
             </CardHeader>
-            <CardContent className="relative z-10">
+            <CardContent>
               <Link href="/company/agents">
-                <Button className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all duration-300">
+                <Button className="w-full" size="sm">
                   <Eye className="w-4 h-4 mr-2" />
                   Manage Agents
                 </Button>
@@ -371,27 +400,21 @@ export default function CompanyDashboard() {
           transition={{ duration: 0.3, delay: 0.25 }}
           whileHover={{ scale: 1.01 }}
         >
-          <Card className="backdrop-blur-xl bg-gradient-to-br from-white/80 to-white/60 dark:from-gray-800/80 dark:to-gray-700/60 border-white/20 shadow-xl hover:shadow-2xl transition-all duration-300 group overflow-hidden relative">
-            <div className="absolute inset-0 bg-gradient-to-br from-green-500/10 via-transparent to-blue-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-            <CardHeader className="relative z-10">
-              <CardTitle className="flex items-center space-x-2 text-lg">
-                <motion.div
-                  whileHover={{ rotate: 360 }}
-                  transition={{ duration: 0.6 }}
-                >
-                  <MessageSquare className="w-5 h-5 text-green-600" />
-                </motion.div>
-                <span>Widget Settings</span>
+          <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2 text-base">
+                <MessageSquare className="w-5 h-5 text-gray-700" />
+                <span>Brand Settings</span>
               </CardTitle>
-              <CardDescription>
-                Customize your chat widget appearance and behavior
+              <CardDescription className="text-sm">
+                Manage brands and configure widget settings per brand
               </CardDescription>
             </CardHeader>
-            <CardContent className="relative z-10">
-              <Link href="/company/widget">
-                <Button className="w-full bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 shadow-lg hover:shadow-xl transition-all duration-300">
+            <CardContent>
+              <Link href="/company/brands">
+                <Button className="w-full" size="sm">
                   <Eye className="w-4 h-4 mr-2" />
-                  Configure Widget
+                  Manage Brands
                 </Button>
               </Link>
             </CardContent>
@@ -404,25 +427,19 @@ export default function CompanyDashboard() {
           transition={{ duration: 0.3, delay: 0.3 }}
           whileHover={{ scale: 1.01 }}
         >
-          <Card className="backdrop-blur-xl bg-gradient-to-br from-white/80 to-white/60 dark:from-gray-800/80 dark:to-gray-700/60 border-white/20 shadow-xl hover:shadow-2xl transition-all duration-300 group overflow-hidden relative">
-            <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 via-transparent to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-            <CardHeader className="relative z-10">
-              <CardTitle className="flex items-center space-x-2 text-lg">
-                <motion.div
-                  whileHover={{ rotate: 360 }}
-                  transition={{ duration: 0.6 }}
-                >
-                  <TrendingUp className="w-5 h-5 text-purple-600" />
-                </motion.div>
+          <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2 text-base">
+                <TrendingUp className="w-5 h-5 text-gray-700" />
                 <span>Analytics</span>
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-sm">
                 View detailed performance metrics and reports
               </CardDescription>
             </CardHeader>
-            <CardContent className="relative z-10">
+            <CardContent>
               <Link href="/company/analytics">
-                <Button className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg hover:shadow-xl transition-all duration-300">
+                <Button className="w-full" size="sm">
                   <Eye className="w-4 h-4 mr-2" />
                   View Analytics
                 </Button>
@@ -433,7 +450,7 @@ export default function CompanyDashboard() {
       </div>
 
       {/* Performance Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatsCard
           title="Avg Response Time"
           value={`${stats?.averageResponseTime || 120}s`}
@@ -456,6 +473,91 @@ export default function CompanyDashboard() {
           delay={0.8}
         />
       </div>
+
+      {/* AI Messages Usage - Real-time Tracking */}
+      {stats?.aiMessages && (
+        <Card className="bg-white border border-gray-200 shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center space-x-2">
+              <Bot className="w-5 h-5 text-gray-700" />
+              <span>AI Messages Usage</span>
+              {stats.aiMessages.usagePercentage >= 80 && (
+                <AlertTriangle className="w-4 h-4 text-amber-500 ml-auto" />
+              )}
+            </CardTitle>
+            <CardDescription className="text-sm">
+              Real-time tracking of AI message usage vs plan limit
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    {stats.aiMessages.used.toLocaleString()} / {stats.aiMessages.limit === -1 ? '∞' : stats.aiMessages.limit.toLocaleString()}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {stats.aiMessages.limit === -1 
+                      ? 'Unlimited plan' 
+                      : `${stats.aiMessages.usagePercentage}% of limit used`
+                    }
+                  </p>
+                </div>
+                {stats.aiMessages.limit !== -1 && (
+                  <div className={`text-right ${
+                    stats.aiMessages.usagePercentage >= 90 
+                      ? 'text-red-600' 
+                      : stats.aiMessages.usagePercentage >= 80 
+                        ? 'text-amber-600' 
+                        : 'text-gray-600'
+                  }`}>
+                    <p className="text-3xl font-bold">
+                      {stats.aiMessages.usagePercentage}%
+                    </p>
+                  </div>
+                )}
+              </div>
+              {stats.aiMessages.limit !== -1 && (
+                <>
+                  <div className="w-full bg-gray-200 rounded-full h-3">
+                    <div
+                      className={`h-3 rounded-full transition-all duration-300 ${
+                        stats.aiMessages.usagePercentage >= 90
+                          ? 'bg-red-500'
+                          : stats.aiMessages.usagePercentage >= 80
+                            ? 'bg-amber-500'
+                            : 'bg-blue-500'
+                      }`}
+                      style={{ width: `${Math.min(stats.aiMessages.usagePercentage, 100)}%` }}
+                    />
+                  </div>
+                  {stats.aiMessages.usagePercentage >= 80 && (
+                    <div className={`flex items-center space-x-2 text-sm ${
+                      stats.aiMessages.usagePercentage >= 90 ? 'text-red-600' : 'text-amber-600'
+                    }`}>
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>
+                        {stats.aiMessages.usagePercentage >= 90
+                          ? 'Critical: Approaching limit'
+                          : 'Warning: Near limit'
+                        }
+                      </span>
+                    </div>
+                  )}
+                  {stats.aiMessages.limit > 0 && (
+                    <p className="text-xs text-gray-500">
+                      {stats.aiMessages.limit - stats.aiMessages.used > 0
+                        ? `${(stats.aiMessages.limit - stats.aiMessages.used).toLocaleString()} messages remaining`
+                        : 'Limit reached'
+                      }
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

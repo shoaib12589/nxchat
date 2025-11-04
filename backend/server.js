@@ -34,6 +34,7 @@ const aiTrainingRoutes = require('./routes/ai-training');
 const systemStatusRoutes = require('./routes/system-status');
 const brandRoutes = require('./routes/brands');
 const emailTemplateRoutes = require('./routes/emailTemplates');
+const uploadRoutes = require('./routes/uploads');
 
 // Import trigger service
 const triggerService = require('./services/triggerService');
@@ -163,6 +164,7 @@ app.use('/api/ai-training', checkMaintenanceMode, aiTrainingRoutes);
 app.use('/api/system-status', systemStatusRoutes); // System status routes don't need maintenance check
 app.use('/api/brands', checkMaintenanceMode, brandRoutes);
 app.use('/api/email-templates', checkMaintenanceMode, emailTemplateRoutes);
+app.use('/api/uploads', checkMaintenanceMode, uploadRoutes);
 
 // Serve static files from public directory
 app.use('/public', express.static(path.join(__dirname, 'public')));
@@ -282,6 +284,23 @@ io.on('connection', (socket) => {
         console.log(`Super admin ${user.name} connected (no tenant room needed)`);
       } else {
         console.log(`User ${user.name} has no tenant_id but is not a super admin`);
+      }
+
+      // For agents: Join brand-specific rooms for filtered visitor events
+      if (user.role === 'agent' && user.tenant_id) {
+        const { BrandAgent } = require('./models');
+        const assignedBrands = await BrandAgent.findAll({
+          where: {
+            agent_id: user.id,
+            status: 'active'
+          },
+          attributes: ['brand_id']
+        });
+
+        assignedBrands.forEach(brandAgent => {
+          socket.join(`brand_${brandAgent.brand_id}`);
+          console.log(`Agent ${user.name} joined brand room: brand_${brandAgent.brand_id}`);
+        });
       }
 
     socket.emit('authenticated', { 

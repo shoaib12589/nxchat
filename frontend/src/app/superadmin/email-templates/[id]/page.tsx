@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Save, Mail, ArrowLeft, Eye, TestTube, Code, Loader2 } from 'lucide-react';
+import { Save, Mail, ArrowLeft, Eye, TestTube, Code, Loader2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -35,6 +35,8 @@ const templateTypes = [
   { value: 'agent_invitation', label: 'Agent Invitation', variables: ['name', 'email', 'company', 'login_credentials', 'verification_link'] },
   { value: 'notification', label: 'Notification', variables: ['name', 'message', 'action_url', 'timestamp'] },
   { value: 'chat_assignment', label: 'Chat Assignment', variables: ['agent_name', 'customer_name', 'chat_url'] },
+  { value: 'ticket_created', label: 'Ticket Created', variables: ['customer_name', 'ticket_id', 'ticket_subject', 'ticket_message', 'ticket_status', 'ticket_url', 'created_at'] },
+  { value: 'ticket_reply', label: 'Ticket Reply', variables: ['customer_name', 'ticket_id', 'ticket_subject', 'agent_name', 'reply_message', 'ticket_url', 'replied_at'] },
   { value: 'custom', label: 'Custom', variables: [] }
 ];
 
@@ -128,6 +130,99 @@ export default function EmailTemplateEditorPage() {
         textarea.setSelectionRange(start + variable.length + 2, start + variable.length + 2);
       }, 0);
     }
+  };
+
+  const professionalEmailTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{subject}</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f4f4f4;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f4f4f4;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+        <!-- Main Container -->
+        <table role="presentation" style="max-width: 600px; width: 100%; border-collapse: collapse; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
+              <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">
+                {header_title}
+              </h1>
+              <p style="margin: 10px 0 0 0; color: rgba(255, 255, 255, 0.9); font-size: 16px;">
+                {header_subtitle}
+              </p>
+            </td>
+          </tr>
+          
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <!-- Greeting -->
+              <p style="margin: 0 0 20px 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                Hello {name},
+              </p>
+              
+              <!-- Main Message -->
+              <div style="color: #555555; font-size: 15px; line-height: 1.8;">
+                {message_content}
+              </div>
+              
+              <!-- Call to Action Button -->
+              <table role="presentation" style="width: 100%; margin: 30px 0;">
+                <tr>
+                  <td align="center">
+                    <a href="{action_url}" style="display: inline-block; padding: 14px 32px; background-color: #667eea; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 15px; letter-spacing: 0.5px; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);">
+                      {action_text}
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- Additional Information -->
+              <div style="margin-top: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 6px; border-left: 4px solid #667eea;">
+                <p style="margin: 0; color: #666666; font-size: 14px; line-height: 1.6;">
+                  {additional_info}
+                </p>
+              </div>
+              
+              <!-- Closing -->
+              <p style="margin: 30px 0 0 0; color: #333333; font-size: 16px; line-height: 1.6;">
+                Best regards,<br>
+                <strong style="color: #667eea;">The NxChat Team</strong>
+              </p>
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 30px; background-color: #f8f9fa; border-top: 1px solid #e9ecef; text-align: center;">
+              <p style="margin: 0 0 10px 0; color: #666666; font-size: 13px; line-height: 1.5;">
+                This is an automated email from <strong style="color: #667eea;">NxChat</strong>.
+              </p>
+              <p style="margin: 0; color: #999999; font-size: 12px;">
+                © 2024 NxChat. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  const insertProfessionalTemplate = () => {
+    if (template.html_content && !confirm('This will replace your current HTML content. Continue?')) {
+      return;
+    }
+    setTemplate({
+      ...template,
+      html_content: professionalEmailTemplate
+    });
+    toast.success('Professional template inserted! Customize the content as needed.');
   };
 
   const selectedType = templateTypes.find(t => t.value === template.type);
@@ -252,7 +347,21 @@ export default function EmailTemplateEditorPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="html_content">HTML Content *</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="html_content">HTML Content *</Label>
+                  {!previewMode && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={insertProfessionalTemplate}
+                      className="text-xs"
+                    >
+                      <Sparkles className="w-3 h-3 mr-1" />
+                      Use Professional Template
+                    </Button>
+                  )}
+                </div>
                 {!previewMode ? (
                   <Textarea
                     id="html_content"
@@ -260,18 +369,19 @@ export default function EmailTemplateEditorPage() {
                     value={template.html_content}
                     onChange={(e) => setTemplate({ ...template, html_content: e.target.value })}
                     placeholder="<div><h1>Hello {name}!</h1><p>Welcome to our platform.</p></div>"
-                    className="font-mono"
+                    className="font-mono text-sm"
                   />
                 ) : (
-                  <div className="border rounded-md p-4 bg-muted/50">
+                  <div className="border rounded-md p-4 bg-muted/50 overflow-auto max-h-[600px]">
                     <div 
                       dangerouslySetInnerHTML={{ __html: template.html_content }}
                       className="prose max-w-none"
+                      style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}
                     />
                   </div>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Use HTML tags and {`{variable}`} syntax for dynamic content
+                  Use HTML tags and {`{variable}`} syntax for dynamic content. Click "Use Professional Template" to start with a responsive email design.
                 </p>
               </div>
 

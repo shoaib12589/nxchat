@@ -1,8 +1,41 @@
 const express = require('express');
 const router = express.Router();
 const path = require('path');
-const { WidgetSetting, Visitor, VisitorMessage, VisitorActivity, SystemSetting, WidgetKey } = require('../models');
+const multer = require('multer');
+const { WidgetSetting, Visitor, VisitorMessage, VisitorActivity, SystemSetting, WidgetKey, Company, Plan, BannedIP } = require('../models');
 const aiService = require('../services/aiService');
+const { isIPBanned } = require('../services/bannedIPCache');
+const { uploadFile } = require('../services/storageService');
+const { v4: uuidv4 } = require('uuid');
+
+// Configure multer for visitor file uploads (store in memory)
+const visitorUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = [
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'application/pdf',
+      'text/plain',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ];
+    
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type'), false);
+    }
+  }
+});
 
 // Handle preflight OPTIONS requests for CORS
 router.options('*', (req, res) => {
@@ -104,10 +137,9 @@ router.get('/snippet.js', async (req, res) => {
 
 ` + widgetCode;
 
-    // No minification to prevent syntax errors - just remove comments
-    const obfuscatedCode = injectedCode
-      .replace(/\/\*[\s\S]*?\*\//g, '') // Remove block comments
-      .replace(/\/\/.*$/gm, ''); // Remove line comments
+    // No minification to prevent syntax errors - skip comment removal to avoid breaking URLs
+    // Comment removal can break URLs like http:// and https:// so we'll leave them intact
+    const obfuscatedCode = injectedCode;
 
     // Validate the generated JavaScript before sending
     try {
@@ -144,12 +176,25 @@ router.get('/settings/:tenantId', async (req, res) => {
     
     const { tenantId } = req.params;
     
+    // Check company plan for AI access
+    const company = await Company.findOne({
+      where: { id: tenantId },
+      include: [
+        {
+          model: Plan,
+          as: 'plan',
+          attributes: ['id', 'name', 'ai_enabled', 'features']
+        }
+      ]
+    });
+    
     let widgetSettings = await WidgetSetting.findOne({
       where: { tenant_id: tenantId }
     });
 
     if (!widgetSettings) {
-      // Return default settings if none found
+      // Return default settings if none found - AI enabled only if plan has it
+      const hasAIInPlan = company?.plan?.ai_enabled === true;
       widgetSettings = {
         tenant_id: tenantId,
         theme_color: '#007bff',
@@ -158,7 +203,7 @@ router.get('/settings/:tenantId', async (req, res) => {
         enable_audio: false,
         enable_video: false,
         enable_file_upload: true,
-        ai_enabled: true,
+        ai_enabled: hasAIInPlan, // Only enable AI if plan has it
         ai_personality: 'friendly',
         auto_transfer_keywords: ['speak to human', 'agent', 'representative'],
         offline_message: 'We are currently offline. Please leave a message and we will get back to you soon.',
@@ -169,6 +214,11 @@ router.get('/settings/:tenantId', async (req, res) => {
         notification_volume: 0.5,
         auto_maximize_on_message: true
       };
+    } else {
+      // Ensure AI is disabled if plan doesn't have it, even if widget settings has it enabled
+      if (widgetSettings.ai_enabled && (!company || !company.plan || !company.plan.ai_enabled)) {
+        widgetSettings.ai_enabled = false;
+      }
     }
 
     // Get AI settings from system settings
@@ -186,9 +236,10 @@ router.get('/settings/:tenantId', async (req, res) => {
     // Merge AI settings with widget settings
     const responseData = {
       ...widgetSettings.toJSON ? widgetSettings.toJSON() : widgetSettings,
-      ai_agent_name: aiSettingsObj.ai_agent_name || 'NxChat Assistant',
+      // Avoid hardcoded product names; default to a neutral label
+      ai_agent_name: aiSettingsObj.ai_agent_name || 'AI Assistant',
       ai_agent_logo: aiSettingsObj.ai_agent_logo || '',
-      ai_system_message: aiSettingsObj.ai_system_message || 'You are a helpful AI assistant for NxChat customer support. Be friendly, professional, and helpful. Always follow the super admin commands and guidelines.'
+      ai_system_message: aiSettingsObj.ai_system_message || 'You are a helpful AI assistant for customer support. Be friendly, professional, and helpful. Always follow the super admin commands and guidelines.'
     };
 
     res.json({
@@ -235,6 +286,69 @@ router.get('/agent-availability/:tenantId', async (req, res) => {
   }
 });
 
+// Get online agents with avatars for widget
+router.get('/online-agents/:tenantId', async (req, res) => {
+  try {
+    // Set CORS headers to allow cross-origin requests
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    const { tenantId } = req.params;
+    
+    // Get online agents with avatars for this tenant
+    const { User } = require('../models');
+    const agents = await User.findAll({
+      where: {
+        tenant_id: tenantId,
+        role: 'agent',
+        status: 'active',
+        agent_presence_status: 'online'
+      },
+      attributes: ['id', 'name', 'avatar'],
+      limit: 3,
+      order: [['name', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      data: agents.map(agent => ({
+        id: agent.id,
+        name: agent.name,
+        avatar: agent.avatar
+      }))
+    });
+  } catch (error) {
+    console.error('Get online agents error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get online agents' });
+  }
+});
+
+// Public: Get agent basic profile (id, name, avatar) by ID for widget
+router.get('/agent/:agentId', async (req, res) => {
+  try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    const { agentId } = req.params;
+    if (!agentId) {
+      return res.status(400).json({ success: false, message: 'agentId is required' });
+    }
+
+    const { User } = require('../models');
+    const agent = await User.findByPk(agentId, { attributes: ['id', 'name', 'avatar'] });
+    if (!agent) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+
+    return res.json({ success: true, data: { id: agent.id, name: agent.name, avatar: agent.avatar } });
+  } catch (error) {
+    console.error('Get widget agent error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get agent' });
+  }
+});
+
 // AI Chat endpoint for widget
 router.post('/chat/ai', async (req, res) => {
   try {
@@ -255,7 +369,27 @@ router.post('/chat/ai', async (req, res) => {
       });
     }
 
-    // Check if AI is enabled for this tenant
+    // Check if AI is enabled for this tenant's subscription plan first
+    const company = await Company.findOne({
+      where: { id: tenantId },
+      include: [
+        {
+          model: Plan,
+          as: 'plan',
+          attributes: ['id', 'name', 'ai_enabled', 'features']
+        }
+      ]
+    });
+
+    // Check if plan has AI enabled
+    if (!company || !company.plan || !company.plan.ai_enabled) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'AI chat is not available in your current plan. Please upgrade to access AI features.' 
+      });
+    }
+
+    // Also check widget settings
     const widgetSettings = await WidgetSetting.findOne({
       where: { tenant_id: tenantId }
     });
@@ -336,13 +470,11 @@ router.post('/chat/ai', async (req, res) => {
           tenant_id: tenantId,
           sender_type: 'system',
           sender_name: 'System',
-          message: `AI transferred this chat to agent ${transferResult.agent.name}`,
+          message: 'AI transferred this chat to agent pool. An agent will be with you shortly.',
           message_type: 'system',
           is_read: false,
           metadata: {
-            transfer_type: 'ai_to_agent',
-            assigned_agent_id: transferResult.agent.id,
-            assigned_agent_name: transferResult.agent.name
+            transfer_type: 'ai_to_agent_pool'
           }
         });
         
@@ -351,26 +483,60 @@ router.post('/chat/ai', async (req, res) => {
         console.error('Error storing transfer message in database:', dbError);
       }
       
-      // Broadcast transfer notification to agents
+      // Broadcast transfer notification to ALL online agents (not specific agent)
       const io = req.app.get('io');
       if (io) {
         const transferData = {
           visitorId: visitorId,
           tenantId: tenantId,
-          agentId: transferResult.agent.id,
-          agentName: transferResult.agent.name,
-          message: 'AI transferred this chat to you',
+          message: 'Chat available for transfer - moved to agent pool',
           timestamp: new Date().toISOString(),
-          type: 'ai_transfer'
+          type: 'ai_transfer_pool'
         };
         
-        console.log('Broadcasting transfer notification to agents:', transferData);
+        console.log('Broadcasting transfer notification to all agents:', transferData);
         
-        // Send to specific agent
-        io.to(`user_${transferResult.agent.id}`).emit('chat:transferred', transferData);
+        // Get visitor's brand_id to emit to brand-specific room (all agents in that brand)
+        const visitorData = await Visitor.findByPk(visitorId, { attributes: ['brand_id'] });
+        if (visitorData && visitorData.brand_id) {
+          // Broadcast to brand-specific room so ALL agents assigned to that brand receive it
+          io.to(`brand_${visitorData.brand_id}`).emit('visitor:transfer', transferData);
+          console.log(`Emitted visitor:transfer to brand room (all agents): brand_${visitorData.brand_id}`);
+        } else {
+          console.warn('Visitor has no brand_id, emitting to tenant room (all agents) as fallback');
+          io.to(`tenant_${tenantId}`).emit('visitor:transfer', transferData);
+        }
         
-        // Send to all agents in tenant for general notification
-        io.to(`tenant_${tenantId}`).emit('visitor:transfer', transferData);
+        // Also emit visitor update so UI refreshes
+        const updatedVisitor = await Visitor.findByPk(visitorId, {
+          include: [
+            {
+              model: require('../models').Brand,
+              as: 'brand',
+              attributes: ['id', 'name', 'primary_color'],
+              required: false
+            }
+          ]
+        });
+        
+        if (updatedVisitor) {
+          const transformedVisitor = {
+            id: updatedVisitor.id,
+            name: updatedVisitor.name || 'Anonymous Visitor',
+            email: updatedVisitor.email,
+            phone: updatedVisitor.phone,
+            avatar: updatedVisitor.avatar,
+            status: updatedVisitor.status,
+            assignedAgent: null,
+            brand: updatedVisitor.brand,
+            brandName: updatedVisitor.brand?.name || 'No Brand',
+            last_activity: updatedVisitor.last_activity,
+            created_at: updatedVisitor.created_at,
+            updated_at: updatedVisitor.updated_at
+          };
+          
+          io.to(`tenant_${tenantId}`).emit('visitor:update', transformedVisitor);
+        }
       }
       
       return res.json({
@@ -381,7 +547,7 @@ router.post('/chat/ai', async (req, res) => {
           tokens_used: aiResponse.tokens_used,
           isTransferRequest: true,
           transferSuccess: true,
-          agent: transferResult.agent
+          agent: null // No specific agent assigned
         }
       });
     }
@@ -443,6 +609,45 @@ router.post('/chat/ai', async (req, res) => {
   }
 });
 
+// Helper function to fetch location from ip-api.com
+async function fetchLocationFromIPAPI(ipAddress) {
+  if (!ipAddress || ipAddress === 'Unknown') {
+    return null;
+  }
+
+  try {
+    const axios = require('axios');
+    const response = await axios.get(`http://ip-api.com/json/${encodeURIComponent(ipAddress)}`, {
+      params: {
+        fields: 'status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query,mobile,proxy,hosting'
+      },
+      timeout: 5000
+    });
+
+    if (response.data && response.data.status === 'success') {
+      return {
+        country: response.data.country || 'Unknown',
+        city: response.data.city || 'Unknown',
+        region: response.data.regionName || response.data.region || 'Unknown',
+        timezone: response.data.timezone || null,
+        zip: response.data.zip || null,
+        lat: response.data.lat || null,
+        lon: response.data.lon || null,
+        isp: response.data.isp || null,
+        org: response.data.org || null,
+        as: response.data.as || null,
+        mobile: response.data.mobile || false,
+        proxy: response.data.proxy || false,
+        hosting: response.data.hosting || false
+      };
+    }
+  } catch (error) {
+    console.warn('Failed to fetch location from ip-api.com:', error.message);
+  }
+
+  return null;
+}
+
 // Create or update visitor
 router.post('/visitor', async (req, res) => {
   try {
@@ -480,7 +685,10 @@ router.post('/visitor', async (req, res) => {
       isReturning
     } = req.body;
     
+    // Log only in development
+    if (process.env.NODE_ENV === 'development') {
     console.log('Visitor update request:', { visitorId, sessionDuration, currentPage });
+    }
     
     if (!visitorId || !sessionId || !tenantId) {
       return res.status(400).json({ 
@@ -498,21 +706,75 @@ router.post('/visitor', async (req, res) => {
     const defaultBrandId = defaultBrand ? defaultBrand.id : null;
 
     // Check if visitor already exists
-    console.log('Looking for visitor:', { visitorId, tenantId });
     let visitor = await Visitor.findOne({
       where: { 
         id: visitorId,
         tenant_id: tenantId 
-      }
+      },
+      attributes: ['id', 'session_id', 'name', 'email', 'phone', 'avatar', 'current_page', 'referrer', 'location', 'device', 'user_agent', 'ip_address', 'tags', 'session_duration', 'messages_count', 'visits_count', 'last_activity', 'status', 'is_active', 'source', 'medium', 'campaign', 'content', 'term', 'keyword', 'search_engine', 'landing_page', 'tenant_id', 'brand_id']
     });
 
-    console.log('Visitor lookup result:', { found: !!visitor });
+    // If IP is provided but location is missing, fetch from ip-api.com
+    let finalLocation = location && typeof location === 'object' ? location : null;
+    let finalIPAddress = ipAddress || null;
+    
+    // Get IP from request if not provided in body
+    if (!finalIPAddress) {
+      const getClientIP = (req) => {
+        return req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+               req.headers['x-real-ip'] ||
+               req.connection?.remoteAddress ||
+               req.socket?.remoteAddress ||
+               req.ip ||
+               null;
+      };
+      finalIPAddress = getClientIP(req);
+    }
+
+    // Check if IP is banned (using cached service)
+    if (finalIPAddress && finalIPAddress !== 'Unknown' && finalIPAddress !== null) {
+      const isBanned = await isIPBanned(finalIPAddress, tenantId);
+      
+      if (isBanned) {
+        // IP is banned, return error without showing widget
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Access denied',
+          banned: true
+        });
+      }
+    }
+
+    // If we have IP but no location (or location is empty/Unknown), fetch from ip-api.com
+    if (finalIPAddress && finalIPAddress !== 'Unknown') {
+      if (!finalLocation || !finalLocation.country || finalLocation.country === 'Unknown') {
+        // Fetch location from ip-api.com (only log in development)
+        if (process.env.NODE_ENV === 'development') {
+        console.log('Fetching location from ip-api.com for IP:', finalIPAddress);
+        }
+        const fetchedLocation = await fetchLocationFromIPAPI(finalIPAddress);
+        if (fetchedLocation) {
+          finalLocation = fetchedLocation;
+        }
+      }
+    }
 
     if (visitor) {
       // Update existing visitor
       // Increment visits_count if this is a returning visitor with a new session
       const shouldIncrementVisits = isReturning && visitor.session_id !== sessionId;
       const newVisitsCount = shouldIncrementVisits ? (visitor.visits_count || 1) + 1 : visitor.visits_count;
+      
+      // Use fetched location if available, otherwise use existing location
+      // Only update location if we have valid data (not empty object or Unknown)
+      let locationToSave = visitor.location && typeof visitor.location === 'object' && 
+                          visitor.location.country && visitor.location.country !== 'Unknown'
+                          ? visitor.location : {};
+      
+      // Override with new location if it's valid
+      if (finalLocation && finalLocation.country && finalLocation.country !== 'Unknown') {
+        locationToSave = finalLocation;
+      }
       
       await visitor.update({
         session_id: sessionId,
@@ -522,10 +784,14 @@ router.post('/visitor', async (req, res) => {
         avatar: avatar || visitor.avatar,
         current_page: currentPage || visitor.current_page,
         referrer: referrer || visitor.referrer,
-        location: location || visitor.location,
+        location: (locationToSave && locationToSave.country && locationToSave.country !== 'Unknown') 
+          ? locationToSave 
+          : (visitor.location && typeof visitor.location === 'object' && visitor.location.country && visitor.location.country !== 'Unknown' 
+              ? visitor.location 
+              : {}),
         device: device || visitor.device,
         user_agent: userAgent || visitor.user_agent,
-        ip_address: ipAddress || visitor.ip_address,
+        ip_address: finalIPAddress || visitor.ip_address,
         tags: tags || visitor.tags,
         session_duration: sessionDuration !== undefined ? sessionDuration : visitor.session_duration,
         messages_count: messagesCount !== undefined ? messagesCount : visitor.messages_count,
@@ -548,7 +814,10 @@ router.post('/visitor', async (req, res) => {
       
       // Always emit visitor update for returning visitors to ensure they show up in active section
       if (isReturning) {
-        console.log('Returning visitor detected' + (shouldIncrementVisits ? `, visits count: ${newVisitsCount}` : ''));
+        // Log only in development
+        if (process.env.NODE_ENV === 'development' && shouldIncrementVisits) {
+          console.log('Returning visitor detected, visits count:', newVisitsCount);
+        }
         const io = req.app.get('io');
         if (io) {
           // Fetch the updated visitor with all associations
@@ -570,7 +839,7 @@ router.post('/visitor', async (req, res) => {
           });
           
           if (updatedVisitor) {
-            io.to(`tenant_${tenantId}`).emit('visitor:update', {
+            const updateData = {
               id: updatedVisitor.id,
               name: updatedVisitor.name,
               email: updatedVisitor.email,
@@ -579,8 +848,15 @@ router.post('/visitor', async (req, res) => {
               status: updatedVisitor.status,
               currentPage: updatedVisitor.current_page,
               referrer: updatedVisitor.referrer,
-              location: updatedVisitor.location,
-              device: updatedVisitor.device,
+              ipAddress: updatedVisitor.ip_address || 'Unknown',
+              location: updatedVisitor.location && typeof updatedVisitor.location === 'object' && !Array.isArray(updatedVisitor.location)
+                ? {
+                    country: updatedVisitor.location.country || 'Unknown',
+                    city: updatedVisitor.location.city || 'Unknown',
+                    region: updatedVisitor.location.region || 'Unknown'
+                  }
+                : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+              device: updatedVisitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
               lastActivity: updatedVisitor.last_activity,
               sessionDuration: updatedVisitor.session_duration?.toString() || '0',
               messagesCount: updatedVisitor.messages_count || 0,
@@ -597,8 +873,18 @@ router.post('/visitor', async (req, res) => {
               notes: updatedVisitor.notes,
               createdAt: updatedVisitor.created_at,
               updatedAt: updatedVisitor.updated_at,
-              lastWidgetUpdate: updatedVisitor.last_widget_update
-            });
+              lastWidgetUpdate: updatedVisitor.last_widget_update,
+              widgetStatus: updatedVisitor.widget_status
+            };
+            
+            // Emit to brand-specific room so only agents assigned to this brand see the update
+            if (updatedVisitor.brand_id) {
+              io.to(`brand_${updatedVisitor.brand_id}`).emit('visitor:update', updateData);
+              console.log(`Emitted visitor:update to brand room: brand_${updatedVisitor.brand_id}`);
+            } else {
+              console.warn('Visitor has no brand_id, emitting to tenant room as fallback');
+              io.to(`tenant_${tenantId}`).emit('visitor:update', updateData);
+            }
           }
         }
       }
@@ -615,10 +901,10 @@ router.post('/visitor', async (req, res) => {
         avatar: avatar || null,
         current_page: currentPage || null,
         referrer: referrer || 'Direct',
-        location: location || {},
+        location: (finalLocation && finalLocation.country && finalLocation.country !== 'Unknown') ? finalLocation : {},
         device: device || {},
         user_agent: userAgent || null,
-        ip_address: ipAddress || null,
+        ip_address: finalIPAddress || null,
         tags: tags || [],
         status: 'idle',
         is_active: true,
@@ -641,42 +927,77 @@ router.post('/visitor', async (req, res) => {
       // Emit socket event for new visitor to agents
       const io = req.app.get('io');
       if (io) {
+        // Reload visitor with brand relationship to ensure brand data is included
+        const visitorWithBrand = await Visitor.findByPk(visitor.id, {
+          include: [
+            {
+              model: require('../models').Brand,
+              as: 'brand',
+              attributes: ['id', 'name', 'primary_color'],
+              required: false
+            }
+          ]
+        });
+
         const visitorData = {
-          id: visitor.id,
-          name: visitor.name,
-          email: visitor.email,
-          phone: visitor.phone,
-          avatar: visitor.avatar,
-          status: visitor.status,
-          currentPage: visitor.current_page,
-          referrer: visitor.referrer || 'Direct',
-          ipAddress: visitor.ip_address,
-          location: visitor.location,
-          device: visitor.device,
-          lastActivity: visitor.last_activity,
-          sessionDuration: visitor.session_duration?.toString() || '0',
-          messagesCount: visitor.messages_count || 0,
-          visitsCount: visitor.visits_count || 1,
-          isTyping: visitor.is_typing || false,
+          id: visitorWithBrand.id,
+          name: visitorWithBrand.name,
+          email: visitorWithBrand.email,
+          phone: visitorWithBrand.phone,
+          avatar: visitorWithBrand.avatar,
+          status: visitorWithBrand.status,
+          currentPage: visitorWithBrand.current_page,
+          referrer: visitorWithBrand.referrer || 'Direct',
+          ipAddress: visitorWithBrand.ip_address || 'Unknown',
+          location: visitorWithBrand.location && typeof visitorWithBrand.location === 'object' && !Array.isArray(visitorWithBrand.location)
+            ? {
+                country: visitorWithBrand.location.country || 'Unknown',
+                city: visitorWithBrand.location.city || 'Unknown',
+                region: visitorWithBrand.location.region || 'Unknown'
+              }
+            : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+          device: visitorWithBrand.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
+          lastActivity: visitorWithBrand.last_activity,
+          sessionDuration: visitorWithBrand.session_duration?.toString() || '0',
+          messagesCount: visitorWithBrand.messages_count || 0,
+          visitsCount: visitorWithBrand.visits_count || 1,
+          isTyping: visitorWithBrand.is_typing || false,
           assignedAgent: null,
-          tags: visitor.tags || [],
-          notes: visitor.notes,
-          createdAt: visitor.created_at,
-          updatedAt: visitor.updated_at,
-          lastWidgetUpdate: visitor.last_widget_update,
+          tags: visitorWithBrand.tags || [],
+          notes: visitorWithBrand.notes,
+          createdAt: visitorWithBrand.created_at,
+          updatedAt: visitorWithBrand.updated_at,
+          lastWidgetUpdate: visitorWithBrand.last_widget_update,
+          widgetStatus: visitorWithBrand.widget_status,
+          // Include brand data
+          brand: visitorWithBrand.brand ? {
+            id: visitorWithBrand.brand.id,
+            name: visitorWithBrand.brand.name,
+            primaryColor: visitorWithBrand.brand.primary_color
+          } : null,
+          brandName: visitorWithBrand.brand?.name || 'No Brand',
           // Include tracking fields
-          source: visitor.source,
-          medium: visitor.medium,
-          campaign: visitor.campaign,
-          content: visitor.content,
-          term: visitor.term,
-          keyword: visitor.keyword,
-          searchEngine: visitor.search_engine,
-          landingPage: visitor.landing_page
+          source: visitorWithBrand.source,
+          medium: visitorWithBrand.medium,
+          campaign: visitorWithBrand.campaign,
+          content: visitorWithBrand.content,
+          term: visitorWithBrand.term,
+          keyword: visitorWithBrand.keyword,
+          searchEngine: visitorWithBrand.search_engine,
+          landingPage: visitorWithBrand.landing_page
         };
         
         console.log('Emitting visitor:new event:', visitorData);
-        io.to(`tenant_${tenantId}`).emit('visitor:new', visitorData);
+        
+        // Emit to brand-specific room so only agents assigned to this brand see the visitor
+        if (visitorWithBrand.brand_id) {
+          io.to(`brand_${visitorWithBrand.brand_id}`).emit('visitor:new', visitorData);
+          console.log(`Emitted visitor:new to brand room: brand_${visitorWithBrand.brand_id}`);
+        } else {
+          // Fallback: if no brand, emit to tenant (shouldn't happen in production)
+          console.warn('Visitor has no brand_id, emitting to tenant room as fallback');
+          io.to(`tenant_${tenantId}`).emit('visitor:new', visitorData);
+        }
       }
     }
     
@@ -692,6 +1013,40 @@ router.post('/visitor', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: 'Failed to create/update visitor',
+      error: error.message 
+    });
+  }
+});
+
+// Get visitor IP from request headers (fallback endpoint)
+router.get('/visitor/ip', async (req, res) => {
+  try {
+    // Set CORS headers to allow cross-origin requests
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    // Get IP from request headers (handles proxy/load balancer scenarios)
+    const getClientIP = (req) => {
+      return req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+             req.headers['x-real-ip'] ||
+             req.connection?.remoteAddress ||
+             req.socket?.remoteAddress ||
+             req.ip ||
+             'Unknown';
+    };
+    
+    const ip = getClientIP(req);
+    
+    res.json({
+      success: true,
+      ip: ip
+    });
+  } catch (error) {
+    console.error('Get visitor IP error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to get IP address',
       error: error.message 
     });
   }
@@ -814,7 +1169,15 @@ router.post('/visitor/status', async (req, res) => {
         const io = req.app.get('io');
         if (io) {
           console.log('Emitting visitor:leave event for visitor:', visitorId);
-          io.to(`tenant_${tenantId}`).emit('visitor:leave', visitorId);
+          // Get visitor's brand_id to emit to brand-specific room
+          const visitor = await Visitor.findByPk(visitorId, { attributes: ['brand_id'] });
+          if (visitor && visitor.brand_id) {
+            io.to(`brand_${visitor.brand_id}`).emit('visitor:leave', visitorId);
+            console.log(`Emitted visitor:leave to brand room: brand_${visitor.brand_id}`);
+          } else {
+            console.warn('Visitor has no brand_id, emitting to tenant room as fallback');
+            io.to(`tenant_${tenantId}`).emit('visitor:leave', visitorId);
+          }
         }
       }
     }
@@ -1014,7 +1377,7 @@ router.post('/visitor/request-agent', async (req, res) => {
       });
     }
 
-    // Check if there are available agents
+    // Check if there are available agents (just to verify availability)
     const { User } = require('../models');
     const availableAgents = await User.findAll({
       where: {
@@ -1033,50 +1396,393 @@ router.post('/visitor/request-agent', async (req, res) => {
       });
     }
 
-    // Assign the first available agent
-    const assignedAgent = availableAgents[0];
-    
-    // Update visitor with assigned agent
+    // Update visitor status WITHOUT assigning specific agent
+    // This makes it visible in Transfer Chats section for all online agents
     const visitor = await Visitor.findOne({
       where: { id: visitorId, tenant_id: tenantId }
     });
 
     if (visitor) {
       await visitor.update({
-        assigned_agent_id: assignedAgent.id,
-        status: 'online'
+        assigned_agent_id: null, // Don't assign to specific agent
+        status: 'waiting_for_agent' // Set to waiting_for_agent to move to Transfer Chats section
       });
     }
 
-    // Emit socket event to notify widget that agent has been assigned
+    // Store transfer message in database
+    try {
+      const { VisitorMessage } = require('../models');
+      await VisitorMessage.create({
+        visitor_id: visitorId,
+        tenant_id: tenantId,
+        sender_type: 'system',
+        sender_name: 'System',
+        message: "I'm transferring you to a human agent. An agent will be with you shortly.",
+        message_type: 'system',
+        is_read: false,
+        metadata: {
+          transfer_type: 'ai_to_agent_pool'
+        }
+      });
+    } catch (dbError) {
+      console.error('Error storing transfer message:', dbError);
+    }
+
+    // Emit socket event to notify widget and ALL agents that chat is being transferred
     const io = req.app.get('io');
     if (io) {
-      const joinData = {
+      const transferData = {
         visitorId: visitorId,
-        agentId: assignedAgent.id,
-        agentName: assignedAgent.name,
-        tenantId: tenantId
+        tenantId: tenantId,
+        message: "I'm transferring you to a human agent. Please hold on while I connect you...",
+        timestamp: new Date().toISOString(),
+        type: 'ai_transfer_pool'
       };
-      console.log('Emitting agent:join event for transfer:', joinData);
+      console.log('Emitting visitor:transfer event for transfer to pool:', transferData);
       
-      // Send to specific visitor room
-      io.to(`visitor_${visitorId}`).emit('agent:join', joinData);
+      // Send to specific visitor room - use visitor:transfer, NOT agent:join
+      io.to(`visitor_${visitorId}`).emit('visitor:transfer', transferData);
       
-      // Also broadcast to agents for monitoring
-      io.to(`tenant_${tenantId}`).emit('agent:join', joinData);
+      // Get visitor's brand_id to emit to brand-specific room (ALL agents in that brand)
+      const visitorData = await Visitor.findByPk(visitorId, { 
+        attributes: ['brand_id'],
+        include: [
+          {
+            model: require('../models').Brand,
+            as: 'brand',
+            attributes: ['id', 'name', 'primary_color'],
+            required: false
+          }
+        ]
+      });
+      
+      if (visitorData && visitorData.brand_id) {
+        // Broadcast to brand-specific room so ALL agents assigned to that brand receive it
+        io.to(`brand_${visitorData.brand_id}`).emit('visitor:transfer', transferData);
+        console.log(`Emitted visitor:transfer to brand room (all agents): brand_${visitorData.brand_id}`);
+      } else {
+        console.warn('Visitor has no brand_id, emitting to tenant room (all agents) as fallback');
+        io.to(`tenant_${tenantId}`).emit('visitor:transfer', transferData);
+      }
+      
+      // Also emit visitor update so UI refreshes for all agents
+      if (visitorData) {
+        const transformedVisitor = {
+          id: visitorData.id,
+          name: visitorData.name || 'Anonymous Visitor',
+          email: visitorData.email,
+          phone: visitorData.phone,
+          avatar: visitorData.avatar,
+          status: 'waiting_for_agent',
+          assignedAgent: null, // No specific agent assigned
+          brand: visitorData.brand,
+          brandName: visitorData.brand?.name || 'No Brand',
+          last_activity: visitorData.last_activity || new Date(),
+          created_at: visitorData.created_at,
+          updated_at: visitorData.updated_at
+        };
+        
+        io.to(`tenant_${tenantId}`).emit('visitor:update', transformedVisitor);
+      }
     }
 
     res.json({
       success: true,
-      message: 'Agent assigned successfully',
+      message: 'Chat moved to transfer pool - visible to all online agents',
       data: {
-        agentId: assignedAgent.id,
-        agentName: assignedAgent.name
+        agentId: null, // No specific agent assigned
+        agentName: null
       }
     });
   } catch (error) {
     console.error('Agent transfer request error:', error);
     res.status(500).json({ success: false, message: 'Failed to request agent transfer' });
+  }
+});
+
+// Handle OPTIONS request for create-ticket endpoint
+router.options('/visitor/create-ticket', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.status(200).end();
+});
+
+// Handle visitor create ticket from offline form
+router.post('/visitor/create-ticket', async (req, res) => {
+  try {
+    // Set CORS headers to allow cross-origin requests
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    const { visitorId, tenantId, name, email, phone, message } = req.body;
+    
+    console.log('Create ticket request received:', { visitorId, tenantId, hasName: !!name, hasEmail: !!email, hasMessage: !!message });
+    
+    if (!visitorId || !tenantId || !name || !email || !message) {
+      console.error('Missing required fields:', { visitorId: !!visitorId, tenantId: !!tenantId, name: !!name, email: !!email, message: !!message });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'visitorId, tenantId, name, email, and message are required' 
+      });
+    }
+
+    // Get visitor to find customer_id and brand_id
+    const visitor = await Visitor.findOne({
+      where: { id: visitorId, tenant_id: tenantId }
+    });
+
+    if (!visitor) {
+      console.error('Visitor not found:', { visitorId, tenantId });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Visitor not found' 
+      });
+    }
+    
+    console.log('Visitor found:', visitor.id);
+
+    // Get or create customer/user record if needed
+    let customerId = visitor.customer_id;
+    if (!customerId && email) {
+      // Check if customer exists with this email
+      const { User } = require('../models');
+      let customer = await User.findOne({
+        where: {
+          email: email,
+          tenant_id: tenantId,
+          role: 'customer'
+        }
+      });
+
+      if (!customer) {
+        try {
+          // Create customer record - generate a random password for customers (they won't login via normal auth)
+          const randomPassword = require('crypto').randomBytes(16).toString('hex');
+          customer = await User.create({
+            name: name,
+            email: email,
+            tenant_id: tenantId,
+            role: 'customer',
+            status: 'active',
+            password: randomPassword // Required field, but customers typically don't login
+          });
+          console.log('New customer created:', customer.id);
+        } catch (createError) {
+          // If creation fails (e.g., email already exists with different role), try to find any user with this email
+          console.warn('Failed to create customer, checking if user exists:', createError.message);
+          customer = await User.findOne({
+            where: {
+              email: email,
+              tenant_id: tenantId
+            }
+          });
+          
+          if (customer && customer.role !== 'customer') {
+            // If user exists but with different role, we can't use it as customer_id
+            // We'll create the ticket without customer_id or use null
+            console.warn('User exists with different role:', customer.role);
+            customer = null;
+          }
+        }
+        
+      } else {
+        console.log('Existing customer found:', customer.id);
+      }
+
+      if (customer) {
+        customerId = customer.id;
+        console.log('Customer ID set to:', customerId);
+      } else {
+        console.warn('Could not create or find customer, proceeding without customer_id');
+      }
+      
+      // Update visitor with customer_id and phone if provided (single update)
+      const visitorUpdateData = {};
+      if (customerId) {
+        visitorUpdateData.customer_id = customerId;
+      }
+      if (phone) {
+        visitorUpdateData.phone = phone;
+      }
+      if (Object.keys(visitorUpdateData).length > 0) {
+        await visitor.update(visitorUpdateData);
+      }
+    } else {
+      console.log('Using existing customer_id:', customerId);
+    }
+
+    // Ensure customerId exists - if still null, try to create one
+    // Note: customerId can be null for tickets - it's optional in the Ticket model
+    if (!customerId && email) {
+      try {
+        const { User } = require('../models');
+        // Generate a random password for customers (they won't login via normal auth)
+        const randomPassword = require('crypto').randomBytes(16).toString('hex');
+        const customer = await User.create({
+          name: name,
+          email: email,
+          tenant_id: tenantId,
+          role: 'customer',
+          status: 'active',
+          password: randomPassword // Required field, but customers typically don't login
+        });
+        customerId = customer.id;
+        console.log('Fallback customer creation successful:', customerId);
+        
+        // Update visitor with customer_id and phone if provided
+        const updateData = { customer_id: customerId };
+        if (phone) {
+          updateData.phone = phone;
+        }
+        await visitor.update(updateData);
+      } catch (fallbackError) {
+        console.warn('Fallback customer creation failed, proceeding without customer_id:', fallbackError.message);
+        // Continue without customer_id - Ticket model allows null customer_id
+        customerId = null;
+      }
+    }
+    
+    // customerId can be null - Ticket model allows it (allowNull: true)
+    console.log('Final customerId:', customerId);
+
+    // Find an available agent to assign the ticket to
+    let assignedAgentId = null;
+    try {
+      const { getAvailableAgents } = require('../services/triggerService');
+      const availableAgents = await getAvailableAgents(tenantId, null);
+      
+      if (availableAgents && availableAgents.length > 0) {
+        // Assign to the least busy agent
+        assignedAgentId = availableAgents[0].id;
+      } else {
+        // If no online agents, find any active agent as fallback
+        const { User } = require('../models');
+        const anyAgent = await User.findOne({
+          where: {
+            tenant_id: tenantId,
+            role: 'agent',
+            status: 'active'
+          },
+          order: [['created_at', 'ASC']] // Assign to oldest agent as fallback
+        });
+        
+        if (anyAgent) {
+          assignedAgentId = anyAgent.id;
+        }
+      }
+    } catch (agentError) {
+      console.error('Error finding available agents:', agentError);
+      // Continue without agent assignment - ticket will be created as 'open'
+    }
+
+    // Create ticket
+    const { Ticket } = require('../models');
+    
+    // Prepare ticket data
+    const ticketData = {
+      tenant_id: parseInt(tenantId), // Ensure it's an integer
+      customer_id: customerId ? parseInt(customerId) : null,
+      agent_id: assignedAgentId ? parseInt(assignedAgentId) : null,
+      subject: `Contact Form: ${name}`.substring(0, 255), // Ensure subject doesn't exceed 255 chars
+      description: `Name: ${name}\nEmail: ${email}\nPhone: ${phone || 'Not provided'}\n\nMessage:\n${message}`,
+      status: assignedAgentId ? 'pending' : 'open',
+      priority: 'medium',
+      category: 'Support Request'
+    };
+    
+    // Add tags as JSON array - Sequelize should handle JSON fields automatically
+    // Only add tags if the field exists in the model
+    ticketData.tags = ['offline-form', 'widget'];
+    
+    console.log('Creating ticket with data:', { 
+      tenant_id: ticketData.tenant_id,
+      customer_id: ticketData.customer_id,
+      agent_id: ticketData.agent_id,
+      subject: ticketData.subject?.substring(0, 50),
+      status: ticketData.status,
+      hasTags: !!ticketData.tags
+    });
+    
+    let ticket;
+    try {
+      ticket = await Ticket.create(ticketData);
+    } catch (ticketError) {
+      console.error('Ticket creation error:', ticketError);
+      console.error('Ticket error details:', {
+        name: ticketError.name,
+        message: ticketError.message,
+        errors: ticketError.errors
+      });
+      
+      // If tags field is causing issues, try without it
+      if (ticketError.message.includes('tags') || ticketError.errors?.some(e => e.path === 'tags')) {
+        console.warn('Retrying ticket creation without tags field');
+        delete ticketData.tags;
+        ticket = await Ticket.create(ticketData);
+      } else {
+        throw ticketError;
+      }
+    }
+
+    console.log('Ticket created successfully from offline form:', ticket.id, { assignedAgentId, visitorId });
+
+    // Emit socket event to notify assigned agent (if any)
+    if (assignedAgentId) {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`user_${assignedAgentId}`).emit('ticket:new', {
+          ticketId: ticket.id,
+          subject: ticket.subject,
+          customerName: name,
+          customerEmail: email,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Ticket created successfully',
+      data: {
+        ticketId: ticket.id,
+        assignedAgentId: assignedAgentId
+      }
+    });
+  } catch (error) {
+    console.error('========================================');
+    console.error('Create ticket from form error:', error);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    if (error.errors) {
+      console.error('Validation errors:', JSON.stringify(error.errors, null, 2));
+    }
+    console.error('Request body:', {
+      visitorId: req.body.visitorId || 'unknown',
+      tenantId: req.body.tenantId || 'unknown',
+      hasEmail: !!req.body.email,
+      hasName: !!req.body.name,
+      hasMessage: !!req.body.message
+    });
+    console.error('========================================');
+    
+    // Ensure response is sent
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        success: false, 
+        message: 'Failed to create ticket',
+        error: error.message || 'Unknown error occurred',
+        errorType: error.name,
+        details: process.env.NODE_ENV === 'development' ? {
+          stack: error.stack,
+          errors: error.errors
+        } : undefined
+      });
+    } else {
+      console.error('Response already sent, cannot send error response');
+    }
   }
 });
 
@@ -1092,7 +1798,7 @@ router.post('/visitor/end-chat', async (req, res) => {
       });
     }
 
-    // Update visitor to remove assigned agent
+    // Update visitor to remove assigned agent and find associated chat
     const visitor = await Visitor.findOne({
       where: { id: visitorId, tenant_id: tenantId }
     });
@@ -1103,9 +1809,49 @@ router.post('/visitor/end-chat', async (req, res) => {
         status: 'offline'
       });
       
+      // Find and update associated chat if exists
+      const { Chat } = require('../models');
+      const chat = await Chat.findOne({
+        where: {
+          customer_id: visitor.customer_id || visitor.id,
+          tenant_id: tenantId,
+          status: { [require('sequelize').Op.in]: ['waiting', 'active'] }
+        },
+        order: [['created_at', 'DESC']],
+        limit: 1
+      });
+      
+      if (chat) {
+        await chat.update({
+          status: 'visitor_left',
+          ended_at: new Date(),
+          rating: rating || chat.rating,
+          rating_feedback: feedback || chat.rating_feedback
+        });
+        console.log('Updated chat status to visitor_left:', chat.id);
+      }
+      
       console.log('Visitor ended chat:', visitorId, { rating, hasFeedback: !!feedback });
       
-      // Emit socket event to notify agents
+      // Store system message in database
+      const { VisitorMessage } = require('../models');
+      const systemMessage = await VisitorMessage.create({
+        visitor_id: visitorId,
+        tenant_id: tenantId,
+        sender_type: 'system',
+        sender_name: 'System',
+        message: 'Visitor ended the chat.',
+        message_type: 'system',
+        is_read: false,
+        metadata: {
+          event_type: 'chat_ended',
+          ended_by: 'visitor',
+          rating: rating,
+          has_feedback: !!feedback
+        }
+      });
+      
+      // Emit socket event to notify agents with system message data
       const io = req.app.get('io');
       if (io) {
         const endData = {
@@ -1113,15 +1859,40 @@ router.post('/visitor/end-chat', async (req, res) => {
           tenantId: tenantId,
           endedBy: 'visitor',
           rating: rating,
-          feedback: feedback
+          feedback: feedback,
+          // Include system message data for immediate display
+          message: {
+            id: systemMessage.id.toString(),
+            content: 'Visitor ended the chat.',
+            sender: 'system',
+            senderName: 'System',
+            timestamp: systemMessage.created_at,
+            visitorId: visitorId,
+            isRead: false,
+            messageType: 'system',
+            metadata: systemMessage.metadata
+          }
         };
         console.log('Emitting visitor:end-chat event:', endData);
         
         // Send to specific visitor room
         io.to(`visitor_${visitorId}`).emit('visitor:end-chat', endData);
         
-        // Also broadcast to agents for monitoring
-        io.to(`tenant_${tenantId}`).emit('visitor:end-chat', endData);
+        // Get visitor's brand_id to emit to brand-specific room
+        const visitorData = await Visitor.findByPk(visitorId, { attributes: ['brand_id', 'assigned_agent_id'] });
+        if (visitorData && visitorData.brand_id) {
+          // Broadcast to brand-specific room so only assigned agents receive
+          io.to(`brand_${visitorData.brand_id}`).emit('visitor:end-chat', endData);
+          console.log(`Emitted visitor:end-chat to brand room: brand_${visitorData.brand_id}`);
+        } else {
+          console.warn('Visitor has no brand_id, emitting to tenant room as fallback');
+          io.to(`tenant_${tenantId}`).emit('visitor:end-chat', endData);
+        }
+        
+        // Also emit the system message directly to agents who are monitoring this visitor
+        if (visitorData && visitorData.assigned_agent_id) {
+          io.to(`agent_${visitorData.assigned_agent_id}`).emit('visitor:end-chat', endData);
+        }
       }
     }
 
@@ -1204,6 +1975,95 @@ router.post('/visitor/submit-rating', async (req, res) => {
   }
 });
 
+// Handle visitor file upload
+router.post('/visitor/upload', visitorUpload.single('file'), async (req, res) => {
+  try {
+    // Set CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    const { visitorId, tenantId } = req.body;
+    
+    if (!req.file) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No file uploaded' 
+      });
+    }
+    
+    if (!visitorId || !tenantId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'visitorId and tenantId are required' 
+      });
+    }
+
+    // Verify visitor exists
+    const visitor = await Visitor.findOne({
+      where: { id: visitorId, tenant_id: tenantId }
+    });
+
+    if (!visitor) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Visitor not found' 
+      });
+    }
+
+    // Generate unique file name
+    const fileExt = path.extname(req.file.originalname);
+    const fileName = `visitor-attachments/${tenantId}/${visitorId}/${uuidv4()}${fileExt}`;
+
+    console.log('📤 Visitor file upload started:', {
+      fileName: req.file.originalname,
+      size: req.file.size,
+      type: req.file.mimetype,
+      targetFileName: fileName,
+      visitorId,
+      tenantId
+    });
+
+    // Upload to storage (R2 or configured provider)
+    let fileUrl;
+    try {
+      fileUrl = await uploadFile(fileName, req.file.buffer, req.file.mimetype);
+      console.log('✅ File uploaded successfully to storage:', fileUrl);
+    } catch (uploadError) {
+      console.error('❌ File upload error:', uploadError);
+      console.error('❌ Upload error details:', {
+        message: uploadError.message,
+        code: uploadError.code,
+        stack: uploadError.stack
+      });
+      throw uploadError;
+    }
+
+    // Determine message type
+    const messageType = req.file.mimetype.startsWith('image/') ? 'image' : 'file';
+
+    res.json({
+      success: true,
+      message: 'File uploaded successfully',
+      data: {
+        url: fileUrl,
+        filename: req.file.originalname,
+        size: req.file.size,
+        type: req.file.mimetype,
+        message_type: messageType
+      }
+    });
+  } catch (error) {
+    console.error('❌ Visitor file upload error:', error);
+    console.error('❌ Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to upload file',
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
 // Handle visitor messages
 router.post('/visitor/message', async (req, res) => {
   try {
@@ -1212,14 +2072,17 @@ router.post('/visitor/message', async (req, res) => {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     
-    const { visitorId, tenantId, message, sender = 'visitor' } = req.body;
+    const { visitorId, tenantId, message, sender = 'visitor', file_url, file_name, file_size, message_type = 'text' } = req.body;
     
-    if (!visitorId || !tenantId || !message) {
+    if (!visitorId || !tenantId) {
       return res.status(400).json({ 
         success: false, 
-        message: 'visitorId, tenantId, and message are required' 
+        message: 'visitorId and tenantId are required' 
       });
     }
+
+    // Message can be empty if it's a file-only message
+    const messageContent = message || (file_name ? `📎 ${file_name}` : '');
 
     // Store message in database
     const messageRecord = await VisitorMessage.create({
@@ -1227,8 +2090,11 @@ router.post('/visitor/message', async (req, res) => {
       tenant_id: tenantId,
       sender_type: sender,
       sender_name: sender === 'visitor' ? 'Visitor' : sender,
-      message: message,
-      message_type: 'text',
+      message: messageContent,
+      message_type: message_type || (file_url ? (file_url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'image' : 'file') : 'text'),
+      file_url: file_url || null,
+      file_name: file_name || null,
+      file_size: file_size || null,
       is_read: false,
       metadata: {}
     });
@@ -1272,7 +2138,9 @@ router.post('/visitor/message', async (req, res) => {
         });
 
         if (updatedVisitor) {
-          io.to(`tenant_${tenantId}`).emit('visitor:update', {
+          // Emit to brand-specific room
+          if (updatedVisitor.brand_id) {
+            io.to(`brand_${updatedVisitor.brand_id}`).emit('visitor:update', {
             id: updatedVisitor.id,
             name: updatedVisitor.name,
             email: updatedVisitor.email,
@@ -1281,8 +2149,15 @@ router.post('/visitor/message', async (req, res) => {
             status: updatedVisitor.status,
             currentPage: updatedVisitor.current_page,
             referrer: updatedVisitor.referrer,
-            location: updatedVisitor.location,
-            device: updatedVisitor.device,
+            ipAddress: updatedVisitor.ip_address || 'Unknown',
+            location: updatedVisitor.location && typeof updatedVisitor.location === 'object' && !Array.isArray(updatedVisitor.location)
+              ? {
+                  country: updatedVisitor.location.country || 'Unknown',
+                  city: updatedVisitor.location.city || 'Unknown',
+                  region: updatedVisitor.location.region || 'Unknown'
+                }
+              : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+            device: updatedVisitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
             lastActivity: updatedVisitor.last_activity,
             sessionDuration: updatedVisitor.session_duration?.toString() || '0',
             messagesCount: updatedVisitor.messages_count || 0,
@@ -1299,27 +2174,82 @@ router.post('/visitor/message', async (req, res) => {
             notes: updatedVisitor.notes,
             createdAt: updatedVisitor.created_at,
             updatedAt: updatedVisitor.updated_at,
-            lastWidgetUpdate: updatedVisitor.last_widget_update
+            lastWidgetUpdate: updatedVisitor.last_widget_update,
+            widgetStatus: updatedVisitor.widget_status
           });
+          } else {
+            // Fallback: if no brand, emit to tenant (shouldn't happen in production)
+            console.warn('Visitor has no brand_id, emitting visitor:update to tenant room as fallback');
+            io.to(`tenant_${tenantId}`).emit('visitor:update', {
+              id: updatedVisitor.id,
+              name: updatedVisitor.name,
+              email: updatedVisitor.email,
+              phone: updatedVisitor.phone,
+              avatar: updatedVisitor.avatar,
+              status: updatedVisitor.status,
+              currentPage: updatedVisitor.current_page,
+              referrer: updatedVisitor.referrer,
+              ipAddress: updatedVisitor.ip_address || 'Unknown',
+              location: updatedVisitor.location && typeof updatedVisitor.location === 'object' && !Array.isArray(updatedVisitor.location)
+                ? {
+                    country: updatedVisitor.location.country || 'Unknown',
+                    city: updatedVisitor.location.city || 'Unknown',
+                    region: updatedVisitor.location.region || 'Unknown'
+                  }
+                : { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
+              device: updatedVisitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
+              lastActivity: updatedVisitor.last_activity,
+              sessionDuration: updatedVisitor.session_duration?.toString() || '0',
+              messagesCount: updatedVisitor.messages_count || 0,
+              visitsCount: updatedVisitor.visits_count || 1,
+              isTyping: updatedVisitor.is_typing || false,
+              assignedAgent: updatedVisitor.assignedAgent,
+              brand: updatedVisitor.brand ? {
+                id: updatedVisitor.brand.id,
+                name: updatedVisitor.brand.name,
+                primaryColor: updatedVisitor.brand.primary_color
+              } : null,
+              brandName: updatedVisitor.brand?.name || 'No Brand',
+              tags: updatedVisitor.tags || [],
+              notes: updatedVisitor.notes,
+              createdAt: updatedVisitor.created_at,
+              updatedAt: updatedVisitor.updated_at,
+              lastWidgetUpdate: updatedVisitor.last_widget_update,
+              widgetStatus: updatedVisitor.widget_status
+            });
+          }
         }
       }
     }
 
     // Emit socket event to send message to agents
-    const io = req.app.get('io');
-    if (io) {
+    const ioInstance = req.app.get('io');
+    if (ioInstance) {
       const socketData = {
         visitorId: visitorId,
         message: message,
         sender: sender,
         timestamp: messageRecord.created_at,
         messageId: messageRecord.id.toString(),
-        tenantId: tenantId
+        tenantId: tenantId,
+        file_url: messageRecord.file_url,
+        file_name: messageRecord.file_name,
+        file_size: messageRecord.file_size,
+        message_type: messageRecord.message_type
       };
       console.log('Emitting visitor:message event:', socketData);
       
-      // Send to tenant room for agents to receive
-      io.to(`tenant_${tenantId}`).emit('visitor:message', socketData);
+      // Get visitor's brand_id to emit to brand-specific room
+      const visitorForMessage = await Visitor.findByPk(visitorId, { attributes: ['brand_id'] });
+      if (visitorForMessage && visitorForMessage.brand_id) {
+        // Send to brand-specific room so only assigned agents receive
+        ioInstance.to(`brand_${visitorForMessage.brand_id}`).emit('visitor:message', socketData);
+        console.log(`Emitted visitor:message to brand room: brand_${visitorForMessage.brand_id}`);
+      } else {
+        // Fallback: if no brand, emit to tenant (shouldn't happen in production)
+        console.warn('Visitor has no brand_id, emitting to tenant room as fallback');
+        ioInstance.to(`tenant_${tenantId}`).emit('visitor:message', socketData);
+      }
     } else {
       console.log('Socket.io not available for visitor message');
     }
@@ -1377,8 +2307,28 @@ router.post('/visitor/activity-log', async (req, res) => {
       });
     }
 
-    // Create activity log entry
-    await VisitorActivity.create({
+    // Find existing activity entry for this visitor, or create new one
+    // Update existing row instead of creating duplicate rows for the same visitor
+    // This ensures only one row per visitor gets updated with latest activity details
+    let activity = await VisitorActivity.findOne({
+      where: {
+        visitor_id: visitorId,
+        tenant_id: tenantId
+      }
+    });
+
+    if (activity) {
+      // Update existing activity entry with latest details
+      await activity.update({
+        session_id: visitor.session_id,
+        activity_type: activityType,
+        activity_data: activityData || {},
+        page_url: page_url,
+        timestamp: timestamp ? new Date(timestamp) : new Date()
+      });
+    } else {
+      // Create new activity entry only if it doesn't exist
+      activity = await VisitorActivity.create({
       visitor_id: visitorId,
       session_id: visitor.session_id,
       tenant_id: tenantId,
@@ -1387,6 +2337,7 @@ router.post('/visitor/activity-log', async (req, res) => {
       page_url: page_url,
       timestamp: timestamp ? new Date(timestamp) : new Date()
     });
+    }
     
     res.json({
       success: true,

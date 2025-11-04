@@ -267,9 +267,7 @@ router.post('/:id/test', authenticateToken, requireSuperAdmin, async (req, res) 
 
     // Get SMTP settings and send test email
     const smtpSettings = await emailService.getSMTPSettings();
-    
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransporter(smtpSettings);
+    const transporter = await emailService.createTransporter();
 
     await transporter.sendMail({
       from: smtpSettings.auth.user,
@@ -303,6 +301,8 @@ router.get('/types/:type/variables', authenticateToken, requireSuperAdmin, async
       agent_invitation: ['name', 'email', 'company', 'login_credentials', 'verification_link'],
       notification: ['name', 'message', 'action_url', 'timestamp'],
       chat_assignment: ['agent_name', 'customer_name', 'chat_url'],
+      ticket_created: ['customer_name', 'ticket_id', 'ticket_subject', 'ticket_message', 'ticket_status', 'ticket_url', 'created_at'],
+      ticket_reply: ['customer_name', 'ticket_id', 'ticket_subject', 'agent_name', 'reply_message', 'ticket_url', 'replied_at'],
       custom: []
     };
 

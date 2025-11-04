@@ -37,7 +37,12 @@ import {
   FileText,
   RefreshCw,
   Trash2,
-  Download
+  Download,
+  Upload,
+  Image,
+  X,
+  HardDrive,
+  Network
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import apiClient from '@/lib/api';
@@ -109,23 +114,63 @@ interface SystemStatus {
   system: {
     memory: {
       total: string;
+      totalBytes?: number;
       free: string;
+      freeBytes?: number;
       used: string;
+      usedBytes?: number;
       usagePercent: number;
+      available?: string;
     };
     cpu: {
       cores: number;
       model: string;
       speed: string;
+      speedMHz?: number;
       loadAverage: number[];
+      usagePercent?: number;
+      details?: Array<{
+        core: number;
+        usage: number;
+        model: string;
+        speed: number;
+      }>;
+    };
+    disk?: {
+      total: string;
+      used: string;
+      free: string;
+      usagePercent: number;
+      path: string;
+      filesystem?: string;
+    };
+    network?: {
+      interfaces: Array<{
+        name: string;
+        address: string;
+        netmask: string;
+        mac: string;
+        family: string;
+      }>;
+      hostname: string;
+      primary: {
+        name: string;
+        address: string;
+        netmask: string;
+        mac: string;
+        family: string;
+      } | null;
     };
     os: {
       platform: string;
       release: string;
       arch: string;
       hostname: string;
+      type?: string;
+      version?: string;
     };
     uptime: string;
+    uptimeSeconds?: number;
   };
   services: {
     mysql: { status: string; port: number };
@@ -166,6 +211,10 @@ export default function SettingsPage() {
   const [testEmail, setTestEmail] = useState('');
   const [emailTestLoading, setEmailTestLoading] = useState(false);
   const [emailTestResult, setEmailTestResult] = useState<string | null>(null);
+  const [r2TestLoading, setR2TestLoading] = useState(false);
+  const [r2TestResult, setR2TestResult] = useState<string | null>(null);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [faviconUploading, setFaviconUploading] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -178,22 +227,30 @@ export default function SettingsPage() {
     }
   }, [activeTab]);
 
+  // Auto-refresh system status every 30 seconds when on status tab
+  useEffect(() => {
+    if (activeTab !== 'status') return;
+    
+    const interval = setInterval(() => {
+      fetchSystemStatus();
+    }, 30000); // Refresh every 30 seconds
+    
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
   // System Status Functions
   const fetchSystemStatus = async () => {
     setStatusLoading(true);
     try {
-      console.log('Fetching system status...');
       const response = await apiClient.get('/system-status/status');
-      console.log('System status response:', response);
-      console.log('System status data:', response.data);
       
       // Handle both direct data and nested data structure
       const statusData = response.data || response;
-      console.log('Setting system status to:', statusData);
       setSystemStatus(statusData);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to fetch system status:', error);
-      toast.error('Failed to fetch system status');
+      toast.error(error.response?.data?.error || 'Failed to fetch system status');
     } finally {
       setStatusLoading(false);
     }
@@ -371,7 +428,11 @@ export default function SettingsPage() {
   };
 
   const getBooleanValue = (key: string, defaultValue: boolean = false) => {
-    return settings[key] === 'true' || defaultValue;
+    const value = settings[key];
+    if (value === undefined || value === null) {
+      return defaultValue;
+    }
+    return value === 'true' || value === true;
   };
 
   // Redis Configuration Functions
@@ -430,6 +491,29 @@ export default function SettingsPage() {
       toast.error(error.response?.data?.message || 'Failed to send test email');
     } finally {
       setEmailTestLoading(false);
+    }
+  };
+
+  const testR2Connection = async () => {
+    setR2TestLoading(true);
+    setR2TestResult(null);
+    
+    try {
+      const response = await apiClient.post('/superadmin/test-r2', {});
+      
+      if (response.success) {
+        setR2TestResult('success');
+        toast.success('R2 connection test successful!');
+      } else {
+        setR2TestResult('error');
+        toast.error(response.message || 'Failed to test R2 connection');
+      }
+    } catch (error: any) {
+      console.error('R2 test error:', error);
+      setR2TestResult('error');
+      toast.error(error.response?.data?.message || 'Failed to test R2 connection');
+    } finally {
+      setR2TestLoading(false);
     }
   };
 
@@ -590,6 +674,198 @@ export default function SettingsPage() {
                     onChange={(e) => updateSetting('admin_email', e.target.value)}
                     placeholder="admin@your-domain.com"
                   />
+                </div>
+              </div>
+              
+              <Separator />
+              
+              {/* App Logo and Favicon Upload */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium">Branding</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* App Logo Upload */}
+                  <div className="space-y-4">
+                    <Label>Application Logo</Label>
+                    <div className="space-y-3">
+                      {getSettingValue('app_logo') && (
+                        <div className="relative inline-block">
+                          <img
+                            src={getSettingValue('app_logo')}
+                            alt="App Logo"
+                            className="h-20 w-auto object-contain border border-gray-200 rounded-lg p-2 bg-white"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="absolute -top-2 -right-2 h-6 w-6 rounded-full p-0 bg-red-500 hover:bg-red-600 text-white"
+                            onClick={async () => {
+                              try {
+                                await updateSetting('app_logo', '');
+                                toast.success('Logo removed');
+                              } catch (error) {
+                                toast.error('Failed to remove logo');
+                              }
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <label
+                          htmlFor="logo-upload"
+                          className="flex items-center justify-center px-4 py-2 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors"
+                        >
+                          <Upload className="w-4 h-4 mr-2" />
+                          <span className="text-sm">
+                            {getSettingValue('app_logo') ? 'Change Logo' : 'Upload Logo'}
+                          </span>
+                          <input
+                            id="logo-upload"
+                            type="file"
+                            accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/svg+xml"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              
+                              // Validate file size (5MB limit)
+                              if (file.size > 5 * 1024 * 1024) {
+                                toast.error('File size must be less than 5MB');
+                                return;
+                              }
+                              
+                              setLogoUploading(true);
+                              try {
+                                const formData = new FormData();
+                                formData.append('logo', file);
+                                
+                                const response = await apiClient.post('/superadmin/upload-logo', formData);
+                                
+                                if (response.success) {
+                                  await updateSetting('app_logo', response.data.url);
+                                  toast.success('Logo uploaded successfully');
+                                  // Refresh settings to show the new logo
+                                  fetchSettings();
+                                } else {
+                                  toast.error(response.message || 'Failed to upload logo');
+                                }
+                              } catch (error: any) {
+                                console.error('Logo upload error:', error);
+                                toast.error(error.response?.data?.message || 'Failed to upload logo');
+                              } finally {
+                                setLogoUploading(false);
+                                e.target.value = ''; // Reset input
+                              }
+                            }}
+                            disabled={logoUploading}
+                          />
+                        </label>
+                        {logoUploading && (
+                          <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Recommended: PNG or SVG, max 5MB. Logo will be displayed in the application header.
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {/* App Favicon Upload */}
+                  <div className="space-y-4">
+                    <Label>Application Favicon</Label>
+                    <div className="space-y-3">
+                      {getSettingValue('app_favicon') && (
+                        <div className="relative inline-block">
+                          <img
+                            src={getSettingValue('app_favicon')}
+                            alt="App Favicon"
+                            className="h-16 w-16 object-contain border border-gray-200 rounded-lg p-2 bg-white"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="absolute -top-2 -right-2 h-6 w-6 rounded-full p-0 bg-red-500 hover:bg-red-600 text-white"
+                            onClick={async () => {
+                              try {
+                                await updateSetting('app_favicon', '');
+                                toast.success('Favicon removed');
+                              } catch (error) {
+                                toast.error('Failed to remove favicon');
+                              }
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <label
+                          htmlFor="favicon-upload"
+                          className="flex items-center justify-center px-4 py-2 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors"
+                        >
+                          <Upload className="w-4 h-4 mr-2" />
+                          <span className="text-sm">
+                            {getSettingValue('app_favicon') ? 'Change Favicon' : 'Upload Favicon'}
+                          </span>
+                          <input
+                            id="favicon-upload"
+                            type="file"
+                            accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/svg+xml,image/x-icon,image/vnd.microsoft.icon,.ico"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              
+                              // Validate file size (5MB limit)
+                              if (file.size > 5 * 1024 * 1024) {
+                                toast.error('File size must be less than 5MB');
+                                return;
+                              }
+                              
+                              setFaviconUploading(true);
+                              try {
+                                const formData = new FormData();
+                                formData.append('favicon', file);
+                                
+                                const response = await apiClient.post('/superadmin/upload-favicon', formData);
+                                
+                                if (response.success) {
+                                  await updateSetting('app_favicon', response.data.url);
+                                  toast.success('Favicon uploaded successfully');
+                                  // Refresh settings to show the new favicon
+                                  fetchSettings();
+                                } else {
+                                  toast.error(response.message || 'Failed to upload favicon');
+                                }
+                              } catch (error: any) {
+                                console.error('Favicon upload error:', error);
+                                toast.error(error.response?.data?.message || 'Failed to upload favicon');
+                              } finally {
+                                setFaviconUploading(false);
+                                e.target.value = ''; // Reset input
+                              }
+                            }}
+                            disabled={faviconUploading}
+                          />
+                        </label>
+                        {faviconUploading && (
+                          <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Recommended: ICO or PNG (16x16 or 32x32), max 5MB. Favicon appears in browser tabs.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
               
@@ -821,6 +1097,20 @@ export default function SettingsPage() {
                   />
                 </div>
               </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <Label htmlFor="smtp_from_name">From Name</Label>
+                  <Input
+                    id="smtp_from_name"
+                    value={getSettingValue('smtp_from_name', '')}
+                    onChange={(e) => updateSetting('smtp_from_name', e.target.value)}
+                    placeholder="NxChat Support"
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    The name that will appear as the sender of emails
+                  </p>
+                </div>
+              </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
                   <Label>Use Secure Connection</Label>
@@ -974,6 +1264,199 @@ export default function SettingsPage() {
                   <p className="text-sm text-muted-foreground">
                     Comma-separated list of allowed file extensions
                   </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Storage Configuration */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <FileText className="w-5 h-5" />
+                <span>Storage Configuration</span>
+              </CardTitle>
+              <CardDescription>
+                Configure storage provider settings and select default storage
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="default_storage_provider">Default Storage Provider</Label>
+                  <Select
+                    value={getSettingValue('default_storage_provider', 'r2')}
+                    onValueChange={(value) => updateSetting('default_storage_provider', value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select storage provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="r2">Cloudflare R2</SelectItem>
+                      <SelectItem value="wasabi">Wasabi</SelectItem>
+                      <SelectItem value="s3">Amazon S3</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-sm text-muted-foreground">
+                    Select the default storage provider for file uploads. Make sure the selected provider is properly configured below.
+                  </p>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-2">
+                  <Label className="text-base font-semibold">Cloudflare R2 Configuration</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Configure Cloudflare R2 storage provider credentials
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label htmlFor="r2_access_key_id">Access Key ID</Label>
+                    <Input
+                      id="r2_access_key_id"
+                      type="password"
+                      value={getSettingValue('r2_access_key_id', '')}
+                      onChange={(e) => updateSetting('r2_access_key_id', e.target.value)}
+                      placeholder="Your R2 Access Key ID"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      Your Cloudflare R2 Access Key ID
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="r2_secret_access_key">Secret Access Key</Label>
+                    <Input
+                      id="r2_secret_access_key"
+                      type="password"
+                      value={getSettingValue('r2_secret_access_key', '')}
+                      onChange={(e) => updateSetting('r2_secret_access_key', e.target.value)}
+                      placeholder="Your R2 Secret Access Key"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      Your Cloudflare R2 Secret Access Key
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label htmlFor="r2_bucket_name">Bucket Name</Label>
+                    <Input
+                      id="r2_bucket_name"
+                      value={getSettingValue('r2_bucket_name', '')}
+                      onChange={(e) => updateSetting('r2_bucket_name', e.target.value)}
+                      placeholder="nxchat"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      Your R2 bucket name
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="r2_region">Region</Label>
+                    <Input
+                      id="r2_region"
+                      value={getSettingValue('r2_region', 'auto')}
+                      onChange={(e) => updateSetting('r2_region', e.target.value)}
+                      placeholder="auto"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      R2 region (usually "auto")
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="r2_endpoint">Endpoint URL</Label>
+                  <Input
+                    id="r2_endpoint"
+                    type="url"
+                    value={getSettingValue('r2_endpoint', '')}
+                    onChange={(e) => updateSetting('r2_endpoint', e.target.value)}
+                    placeholder="https://083a25b0ffff459d01abf072fa86fb5b.r2.cloudflarestorage.com"
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    Your R2 endpoint URL from Cloudflare dashboard
+                    <br />
+                    Format: https://xxx.r2.cloudflarestorage.com
+                  </p>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-2">
+                  <Label htmlFor="r2_public_url">Public URL (CDN)</Label>
+                  <Input
+                    id="r2_public_url"
+                    type="url"
+                    value={getSettingValue('r2_public_url', '')}
+                    onChange={(e) => updateSetting('r2_public_url', e.target.value)}
+                    placeholder="https://pub-c858b39707e84202a98190bd7fa92be4.r2.dev"
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    The public URL for your Cloudflare R2 bucket. This URL will be used to serve uploaded files.
+                    <br />
+                    Example: https://pub-c858b39707e84202a98190bd7fa92be4.r2.dev
+                  </p>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-4">
+                  <Button
+                    onClick={testR2Connection}
+                    disabled={r2TestLoading}
+                    className="flex items-center space-x-2"
+                  >
+                    {r2TestLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Testing Connection...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Activity className="w-4 h-4" />
+                        <span>Test R2 Connection</span>
+                      </>
+                    )}
+                  </Button>
+
+                  {r2TestResult && (
+                    <div className={`p-3 rounded-md ${
+                      r2TestResult === 'success' 
+                        ? 'bg-green-50 text-green-800 border border-green-200' 
+                        : 'bg-red-50 text-red-800 border border-red-200'
+                    }`}>
+                      <div className="flex items-center space-x-2">
+                        {r2TestResult === 'success' ? (
+                          <CheckCircle className="w-4 h-4" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4" />
+                        )}
+                        <span className="font-medium">
+                          {r2TestResult === 'success' 
+                            ? 'R2 connection test successful! All operations (upload, download, delete) completed successfully.' 
+                            : 'R2 connection test failed. Please check your configuration and credentials.'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-start space-x-2">
+                    <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="font-medium text-blue-900 mb-1">How to get R2 credentials:</h4>
+                      <ol className="list-decimal list-inside space-y-1 text-sm text-blue-800">
+                        <li>Go to Cloudflare Dashboard → R2 → Manage R2 API Tokens</li>
+                        <li>Create API Token with Object Read & Write permissions</li>
+                        <li>Copy the Access Key ID and Secret Access Key</li>
+                        <li>Get your bucket endpoint from R2 → Your Bucket → Settings</li>
+                        <li>Set up a public domain for your bucket to get the Public URL</li>
+                      </ol>
+                    </div>
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -1192,6 +1675,11 @@ export default function SettingsPage() {
               </CardTitle>
               <CardDescription>
                 Monitor system health, services status, and view logs
+                {systemStatus && (
+                  <span className="block mt-1 text-xs text-muted-foreground">
+                    Last updated: {new Date(systemStatus.timestamp).toLocaleString()}
+                  </span>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -1303,24 +1791,45 @@ export default function SettingsPage() {
                           <span>Memory Usage</span>
                         </CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-3">
-                        <div className="flex justify-between">
-                          <span className="text-sm">System Memory</span>
-                          <span className="text-sm font-medium">
-                            {systemStatus.system.memory.used} / {systemStatus.system.memory.total}
-                          </span>
+                      <CardContent className="space-y-4">
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <span className="text-sm font-medium">System Memory</span>
+                            <span className="text-sm font-medium">
+                              {systemStatus.system.memory.used} / {systemStatus.system.memory.total}
+                            </span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-3">
+                            <div 
+                              className={`h-3 rounded-full transition-all ${
+                                systemStatus.system.memory.usagePercent > 80 ? 'bg-red-600' :
+                                systemStatus.system.memory.usagePercent > 60 ? 'bg-yellow-600' :
+                                'bg-blue-600'
+                              }`}
+                              style={{ width: `${systemStatus.system.memory.usagePercent}%` }}
+                            ></div>
+                          </div>
+                          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                            <span>{systemStatus.system.memory.usagePercent}% used</span>
+                            <span>{systemStatus.system.memory.free} free</span>
+                          </div>
                         </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div 
-                            className="bg-blue-600 h-2 rounded-full" 
-                            style={{ width: `${systemStatus.system.memory.usagePercent}%` }}
-                          ></div>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm">Node.js Memory</span>
-                          <span className="text-sm font-medium">
-                            {systemStatus.server.memory.heapUsed} / {systemStatus.server.memory.heapTotal}
-                          </span>
+                        <Separator />
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <span className="text-sm font-medium">Node.js Heap</span>
+                            <span className="text-sm font-medium">
+                              {systemStatus.server.memory.heapUsed} / {systemStatus.server.memory.heapTotal}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                            <div>
+                              <span className="font-medium">RSS:</span> {systemStatus.server.memory.rss}
+                            </div>
+                            <div>
+                              <span className="font-medium">External:</span> {systemStatus.server.memory.external}
+                            </div>
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
@@ -1332,28 +1841,210 @@ export default function SettingsPage() {
                           <span>CPU Usage</span>
                         </CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-3">
-                        <div className="flex justify-between">
-                          <span className="text-sm">CPU Usage</span>
-                          <span className="text-sm font-medium">
-                            {systemStatus.server.cpuUsage.percent}%
-                          </span>
+                      <CardContent className="space-y-4">
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <span className="text-sm font-medium">Overall CPU Usage</span>
+                            <span className="text-sm font-medium">
+                              {systemStatus.system.cpu.usagePercent ?? systemStatus.server.cpuUsage.percent}%
+                            </span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-3">
+                            <div 
+                              className={`h-3 rounded-full transition-all ${
+                                (systemStatus.system.cpu.usagePercent ?? systemStatus.server.cpuUsage.percent) > 80 ? 'bg-red-600' :
+                                (systemStatus.system.cpu.usagePercent ?? systemStatus.server.cpuUsage.percent) > 60 ? 'bg-yellow-600' :
+                                'bg-green-600'
+                              }`}
+                              style={{ width: `${Math.min(systemStatus.system.cpu.usagePercent ?? systemStatus.server.cpuUsage.percent, 100)}%` }}
+                            ></div>
+                          </div>
                         </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div 
-                            className="bg-green-600 h-2 rounded-full" 
-                            style={{ width: `${Math.min(systemStatus.server.cpuUsage.percent, 100)}%` }}
-                          ></div>
+                        <Separator />
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">CPU Model:</span>
+                            <span className="font-medium text-xs">{systemStatus.system.cpu.model}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">CPU Cores:</span>
+                            <span className="font-medium">{systemStatus.system.cpu.cores} cores</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">CPU Speed:</span>
+                            <span className="font-medium">{systemStatus.system.cpu.speed}</span>
+                          </div>
+                          {systemStatus.system.cpu.loadAverage && systemStatus.system.cpu.loadAverage.length > 0 && (
+                            <div className="flex justify-between text-sm">
+                              <span className="text-muted-foreground">Load Average:</span>
+                              <span className="font-medium">{systemStatus.system.cpu.loadAverage.map(l => l.toFixed(2)).join(', ')}</span>
+                            </div>
+                          )}
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm">CPU Cores</span>
-                          <span className="text-sm font-medium">
-                            {systemStatus.system.cpu.cores} cores
-                          </span>
-                        </div>
+                        {systemStatus.system.cpu.details && systemStatus.system.cpu.details.length > 0 && (
+                          <>
+                            <Separator />
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium text-muted-foreground">Per-Core Usage:</p>
+                              <div className="grid grid-cols-2 gap-2">
+                                {systemStatus.system.cpu.details.slice(0, 4).map((core) => (
+                                  <div key={core.core} className="flex justify-between text-xs">
+                                    <span>Core {core.core}:</span>
+                                    <span className="font-medium">{core.usage}%</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </CardContent>
                     </Card>
                   </div>
+
+                  {/* Disk & Network Information */}
+                  {(systemStatus.system.disk || systemStatus.system.network) && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {systemStatus.system.disk && systemStatus.system.disk.total !== 'N/A' && (
+                        <Card>
+                          <CardHeader>
+                            <CardTitle className="flex items-center space-x-2">
+                              <HardDrive className="w-5 h-5" />
+                              <span>Disk Usage</span>
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-3">
+                            <div>
+                              <div className="flex justify-between mb-1">
+                                <span className="text-sm font-medium">Disk Space</span>
+                                <span className="text-sm font-medium">
+                                  {systemStatus.system.disk.used} / {systemStatus.system.disk.total}
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-3">
+                                <div 
+                                  className={`h-3 rounded-full transition-all ${
+                                    systemStatus.system.disk.usagePercent > 90 ? 'bg-red-600' :
+                                    systemStatus.system.disk.usagePercent > 70 ? 'bg-yellow-600' :
+                                    'bg-green-600'
+                                  }`}
+                                  style={{ width: `${systemStatus.system.disk.usagePercent}%` }}
+                                ></div>
+                              </div>
+                              <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                                <span>{systemStatus.system.disk.usagePercent}% used</span>
+                                <span>{systemStatus.system.disk.free} free</span>
+                              </div>
+                            </div>
+                            {systemStatus.system.disk.filesystem && (
+                              <div className="text-xs text-muted-foreground">
+                                <span className="font-medium">Filesystem:</span> {systemStatus.system.disk.filesystem}
+                              </div>
+                            )}
+                            <div className="text-xs text-muted-foreground">
+                              <span className="font-medium">Path:</span> {systemStatus.system.disk.path}
+                            </div>
+                            {(systemStatus.system.disk as any).note && (
+                              <div className="text-xs text-yellow-600 bg-yellow-50 p-2 rounded">
+                                {(systemStatus.system.disk as any).note}
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      )}
+
+                      {systemStatus.system.network && (
+                        <Card>
+                          <CardHeader>
+                            <CardTitle className="flex items-center space-x-2">
+                              <Network className="w-5 h-5" />
+                              <span>Network Information</span>
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-3">
+                            {systemStatus.system.network.primary && (
+                              <div className="space-y-2">
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">Primary IP:</span>
+                                  <span className="font-medium">{systemStatus.system.network.primary.address}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">Interface:</span>
+                                  <span className="font-medium">{systemStatus.system.network.primary.name}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">Netmask:</span>
+                                  <span className="font-medium">{systemStatus.system.network.primary.netmask}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">MAC Address:</span>
+                                  <span className="font-medium text-xs">{systemStatus.system.network.primary.mac}</span>
+                                </div>
+                              </div>
+                            )}
+                            {systemStatus.system.network.interfaces.length > 1 && (
+                              <>
+                                <Separator />
+                                <div className="text-xs text-muted-foreground">
+                                  <span className="font-medium">Total Interfaces:</span> {systemStatus.system.network.interfaces.length}
+                                </div>
+                              </>
+                            )}
+                            <div className="text-xs text-muted-foreground">
+                              <span className="font-medium">Hostname:</span> {systemStatus.system.network.hostname}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Operating System Information */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center space-x-2">
+                        <Server className="w-5 h-5" />
+                        <span>Operating System</span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Platform</p>
+                          <p className="text-sm font-medium">{systemStatus.system.os.platform}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Version</p>
+                          <p className="text-sm font-medium">{systemStatus.system.os.release}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Architecture</p>
+                          <p className="text-sm font-medium">{systemStatus.system.os.arch}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Hostname</p>
+                          <p className="text-sm font-medium">{systemStatus.system.os.hostname}</p>
+                        </div>
+                        {systemStatus.system.os.type && (
+                          <div>
+                            <p className="text-xs text-muted-foreground mb-1">Type</p>
+                            <p className="text-sm font-medium">{systemStatus.system.os.type}</p>
+                          </div>
+                        )}
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">System Uptime</p>
+                          <p className="text-sm font-medium">{systemStatus.system.uptime}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Node.js Version</p>
+                          <p className="text-sm font-medium">{systemStatus.server.nodeVersion}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Process ID</p>
+                          <p className="text-sm font-medium">{systemStatus.server.pid}</p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
 
                   {/* Database & Redis Status */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1364,26 +2055,57 @@ export default function SettingsPage() {
                           <span>Database Status</span>
                         </CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-sm">Status</span>
+                      <CardContent className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm font-medium">Status</span>
                           <Badge variant={systemStatus.database.status === 'healthy' ? 'default' : 'destructive'}>
                             {systemStatus.database.status}
                           </Badge>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm">Response Time</span>
-                          <span className="text-sm font-medium">{systemStatus.database.responseTime}</span>
+                        <Separator />
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Response Time</span>
+                            <span className="font-medium">{systemStatus.database.responseTime}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Database Type</span>
+                            <span className="font-medium">{systemStatus.database.dialect?.toUpperCase() || 'MySQL'}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Version</span>
+                            <span className="font-medium">{systemStatus.database.version}</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm">Version</span>
-                          <span className="text-sm font-medium">{systemStatus.database.version}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm">Connections</span>
-                          <span className="text-sm font-medium">
-                            {systemStatus.database.connectionPool.used}/{systemStatus.database.connectionPool.total}
-                          </span>
+                        <Separator />
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <span className="text-sm font-medium">Connection Pool</span>
+                            <span className="text-sm font-medium">
+                              {systemStatus.database.connectionPool.used}/{systemStatus.database.connectionPool.total}
+                            </span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div 
+                              className={`h-2 rounded-full ${
+                                (systemStatus.database.connectionPool.used / systemStatus.database.connectionPool.total) > 0.8 ? 'bg-red-600' :
+                                (systemStatus.database.connectionPool.used / systemStatus.database.connectionPool.total) > 0.6 ? 'bg-yellow-600' :
+                                'bg-green-600'
+                              }`}
+                              style={{ width: `${(systemStatus.database.connectionPool.used / systemStatus.database.connectionPool.total) * 100}%` }}
+                            ></div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-xs text-muted-foreground mt-2">
+                            <div>
+                              <span className="font-medium">Used:</span> {systemStatus.database.connectionPool.used}
+                            </div>
+                            <div>
+                              <span className="font-medium">Idle:</span> {systemStatus.database.connectionPool.idle}
+                            </div>
+                            <div>
+                              <span className="font-medium">Waiting:</span> {systemStatus.database.connectionPool.waiting}
+                            </div>
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
@@ -1395,9 +2117,9 @@ export default function SettingsPage() {
                           <span>Redis Status</span>
                         </CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-sm">Status</span>
+                      <CardContent className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm font-medium">Status</span>
                           <Badge variant={
                             systemStatus.redis.status === 'healthy' ? 'default' : 
                             systemStatus.redis.status === 'not_configured' ? 'secondary' : 
@@ -1406,22 +2128,41 @@ export default function SettingsPage() {
                             {systemStatus.redis.status}
                           </Badge>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm">Response Time</span>
-                          <span className="text-sm font-medium">{systemStatus.redis.responseTime}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm">Memory Used</span>
-                          <span className="text-sm font-medium">
-                            {systemStatus.redis.memory?.used || 'N/A'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm">Keys</span>
-                          <span className="text-sm font-medium">
-                            {systemStatus.redis.databaseSize || 'N/A'}
-                          </span>
-                        </div>
+                        {systemStatus.redis.status !== 'not_configured' && (
+                          <>
+                            <Separator />
+                            <div className="space-y-2">
+                              <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">Response Time</span>
+                                <span className="font-medium">{systemStatus.redis.responseTime}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">Memory Used</span>
+                                <span className="font-medium">
+                                  {systemStatus.redis.memory?.used || 'N/A'}
+                                </span>
+                              </div>
+                              {systemStatus.redis.memory?.max && (
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">Memory Limit</span>
+                                  <span className="font-medium">{systemStatus.redis.memory.max}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">Keys Stored</span>
+                                <span className="font-medium">
+                                  {systemStatus.redis.databaseSize?.toLocaleString() || 'N/A'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">Connected Clients</span>
+                                <span className="font-medium">
+                                  {systemStatus.redis.connectedClients || 'N/A'}
+                                </span>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </CardContent>
                     </Card>
                   </div>
