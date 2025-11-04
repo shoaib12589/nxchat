@@ -1,0 +1,23 @@
+# Nixpacks configuration for NxChat Frontend (Next.js)
+# This file is optional - Nixpacks will auto-detect Next.js if not present
+
+[phases.setup]
+# Specify Node.js version (optional, can also use .nvmrc or package.json engines)
+nixPkgs = ["nodejs_18"]
+
+[phases.install]
+# Install dependencies
+cmds = ["npm ci"]
+
+[phases.build]
+# Build Next.js application
+cmds = ["npm run build"]
+
+[start]
+# Start Next.js production server
+# Nixpacks will use this or detect from package.json
+cmd = "npm start"
+
+# Environment variables can be set in Coolify dashboard
+# Make sure NEXT_PUBLIC_* variables are set for client-side access
+

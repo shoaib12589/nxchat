@@ -1,0 +1,22 @@
+# Nixpacks configuration for NxChat Backend
+# This file is optional - Nixpacks will auto-detect Node.js if not present
+
+[phases.setup]
+# Specify Node.js version (optional, can also use .nvmrc or package.json engines)
+nixPkgs = ["nodejs_18"]
+
+[phases.install]
+# Install dependencies
+cmds = ["npm ci --production=false"]
+
+[phases.build]
+# Backend doesn't need a build step, but you can add custom commands here
+cmds = ["echo 'Backend build complete'"]
+
+[start]
+# Start command - Nixpacks will use this or detect from package.json
+cmd = "node server.js"
+
+# Environment variables can be set in Coolify dashboard
+# PORT will be automatically set by Coolify
+
