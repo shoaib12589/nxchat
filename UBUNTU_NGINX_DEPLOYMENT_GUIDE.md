@@ -110,7 +110,7 @@ Once in MySQL prompt, run:
 CREATE DATABASE nxchat CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- Create user (replace 'your_secure_password' with a strong password)
-CREATE USER 'nxchat_user'@'localhost' IDENTIFIED BY 'your_secure_password';
+CREATE USER 'nxchat_user'@'localhost' IDENTIFIED BY 'shoaib125890000S$';
 
 -- Grant privileges
 GRANT ALL PRIVILEGES ON nxchat.* TO 'nxchat_user'@'localhost';
@@ -203,13 +203,13 @@ cd /usr/share
 
 # Download phpMyAdmin 8.3 (check latest version at https://www.phpmyadmin.net/downloads/)
 cd /tmp
-wget https://files.phpmyadmin.net/phpMyAdmin/8.3.0/phpMyAdmin-8.3.0-all-languages.tar.gz
+wget https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz
 
 # Extract
-tar -xzf phpMyAdmin-8.3.0-all-languages.tar.gz
+tar -xzf phpMyAdmin-5.2.3-all-languages.tar.gz
 
 # Move to web directory
-sudo mv phpMyAdmin-8.3.0-all-languages /usr/share/phpmyadmin
+sudo mv phpMyAdmin-5.2.3-all-languages /usr/share/phpmyadmin
 
 # Set permissions
 sudo chown -R www-data:www-data /usr/share/phpmyadmin
@@ -574,7 +574,9 @@ sudo chown -R $USER:$USER /var/www/nxchat
 cd /var/www/nxchat
 
 # If using git, clone your repository
-# git clone https://your-repo-url.git .
+git clone https://your-repo-url.git .
+
+sudo git clone https://github.com/shoaib12589/nxchat.git
 
 # Or upload your files via SCP/SFTP
 ```
