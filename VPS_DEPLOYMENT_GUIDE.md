@@ -150,13 +150,13 @@ sudo mysql -u root -p
 CREATE DATABASE nxchat CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- Create user
-CREATE USER 'nxchat_user'@'localhost' IDENTIFIED BY 'your_secure_password_here';
+CREATE USER 'nxchat_user'@'localhost' IDENTIFIED BY 'shoaib125890000ss';
 
 -- Grant privileges
 GRANT ALL PRIVILEGES ON nxchat.* TO 'nxchat_user'@'localhost';
 
 -- Grant privileges for remote access (if needed)
-CREATE USER 'nxchat_user'@'%' IDENTIFIED BY 'your_secure_password_here';
+CREATE USER 'nxchat_user'@'%' IDENTIFIED BY 'shoaib125890000ss';
 GRANT ALL PRIVILEGES ON nxchat.* TO 'nxchat_user'@'%';
 
 -- Flush privileges
@@ -236,7 +236,7 @@ memory_limit = 256M
 Restart PHP-FPM:
 
 ```bash
-sudo systemctl restart php8.1-fpm
+sudo systemctl restart php8.3-fpm
 ```
 
 ### Step 6: Test phpMyAdmin
@@ -276,7 +276,7 @@ sudo npm install -g pm2
 cd /var/www
 
 # Clone repository (replace with your repository URL)
-sudo git clone https://github.com/yourusername/nxchat.git nxchat
+sudo git clone https://github.com/shoaib12589/nxchat.git nxchat
 cd nxchat
 
 # Install all dependencies
@@ -420,7 +420,7 @@ Paste the following configuration:
 # Backend API Server
 server {
     listen 80;
-    server_name api.yourdomain.com;
+    server_name api.konnectbot.com;
 
     # Logging
     access_log /var/log/nginx/api-access.log;
@@ -459,7 +459,7 @@ server {
 # Frontend Server
 server {
     listen 80;
-    server_name yourdomain.com www.yourdomain.com;
+    server_name konnectbot.com www.konnectbot.com;
 
     # Logging
     access_log /var/log/nginx/frontend-access.log;
@@ -481,7 +481,7 @@ server {
 # phpMyAdmin Server
 server {
     listen 80;
-    server_name phpmyadmin.yourdomain.com;
+    server_name phpmyadmin.konnectbot.com;
 
     root /usr/share/phpmyadmin;
     index index.php index.html index.htm;
@@ -497,7 +497,7 @@ server {
 
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
     }
@@ -556,7 +556,7 @@ sudo apt install certbot python3-certbot-nginx -y
 ### Step 2: Obtain SSL Certificates
 
 ```bash
-sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com -d api.yourdomain.com -d phpmyadmin.yourdomain.com
+sudo certbot --nginx -d konnectbot.com -d www.konnectbot.com -d api.konnectbot.com -d phpmyadmin.konnectbot.com
 ```
 
 Follow the prompts:
@@ -718,7 +718,7 @@ sudo systemctl status nginx
 
 **Solutions**:
 - Check Nginx configuration: `sudo nginx -t`
-- Verify PHP-FPM is running: `sudo systemctl status php8.1-fpm`
+- Verify PHP-FPM is running: `sudo systemctl status php8.3-fpm`
 - Check file permissions: `sudo chown -R www-data:www-data /usr/share/phpmyadmin`
 - Verify symlink exists: `ls -la /var/www/phpmyadmin`
 
@@ -784,7 +784,7 @@ sudo tail -f /var/log/nginx/access.log
 sudo tail -f /var/log/nginx/error.log
 
 # PHP-FPM logs
-sudo tail -f /var/log/php8.1-fpm.log
+sudo tail -f /var/log/php8.3-fpm.log
 
 # MySQL logs
 sudo tail -f /var/log/mysql/error.log
@@ -797,13 +797,13 @@ sudo tail -f /var/log/mysql/error.log
 pm2 status
 sudo systemctl status nginx
 sudo systemctl status mysql
-sudo systemctl status php8.1-fpm
+sudo systemctl status php8.3-fpm
 
 # Restart all services
 pm2 restart all
 sudo systemctl restart nginx
 sudo systemctl restart mysql
-sudo systemctl restart php8.1-fpm
+sudo systemctl restart php8.3-fpm
 
 # Check disk space
 df -h

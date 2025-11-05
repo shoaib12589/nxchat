@@ -1,5 +1,5 @@
 const { Sequelize } = require('sequelize');
-require('dotenv').config();
+require('./env-loader'); // Load from root .env file
 
 const sequelize = new Sequelize(
   process.env.MYSQL_DB,

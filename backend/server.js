@@ -6,7 +6,7 @@ const helmet = require('helmet');
 const compression = require('compression');
 const path = require('path');
 const cookieParser = require('cookie-parser');
-require('dotenv').config();
+require('./config/env-loader'); // Load from root .env file
 
 const { sequelize, testConnection } = require('./config/database');
 const { errorHandler, notFound, apiLimiter } = require('./middleware/validation');

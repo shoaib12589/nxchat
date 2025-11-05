@@ -1,6 +1,6 @@
 const Redis = require('ioredis');
 const { Op } = require('sequelize');
-require('dotenv').config();
+require('./env-loader'); // Load from root .env file
 
 // Redis configuration - will be loaded from database
 let redis = null;

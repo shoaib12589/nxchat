@@ -84,7 +84,7 @@ sudo mysql -u root -p
 
 ```sql
 CREATE DATABASE nxchat CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'nxchat_user'@'localhost' IDENTIFIED BY 'your_secure_password';
+CREATE USER 'nxchat_user'@'localhost' IDENTIFIED BY '125890000ss';
 GRANT ALL PRIVILEGES ON nxchat.* TO 'nxchat_user'@'localhost';
 FLUSH PRIVILEGES;
 EXIT;
@@ -108,7 +108,7 @@ sudo npm install -g pm2
 cd /var/www
 
 # Clone repository
-sudo git clone <your-repository-url> nxchat
+sudo git clone https://github.com/shoaib12589/nxchat.git nxchat
 cd nxchat
 
 # Install all dependencies
@@ -263,8 +263,15 @@ pm2 startup
 #### Step 11: Install SSL Certificate (Let's Encrypt)
 ```bash
 sudo apt install certbot python3-certbot-nginx -y
-sudo certbot --nginx -d yourdomain.com -d api.yourdomain.com
+sudo certbot --nginx -d konnectbot.com -d api.konnectbot.com
 ```
+
+
+
+CREATE USER 'shoaib'@'37.1.211.227' IDENTIFIED BY 'shoaib125890000ss';
+GRANT ALL PRIVILEGES ON *.* TO 'shoaib'@'37.1.211.227' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
 
 ### Option 2: Using Docker (Alternative)
 
