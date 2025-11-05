@@ -403,7 +403,7 @@ const generateWidgetKey = async (req, res) => {
       success: true,
       data: {
         widgetKey,
-        snippetUrl: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/widget/snippet.js?key=${widgetKey.key}`
+        snippetUrl: require('../../config/urls').getWidgetUrl(widgetKey.key)
       }
     });
   } catch (error) {

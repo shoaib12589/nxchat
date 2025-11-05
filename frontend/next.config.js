@@ -129,9 +129,13 @@ const nextConfig = {
   // Trailing slash optimization
   trailingSlash: false,
   
-  // Environment variables
+  // Environment variables - These are exposed to the browser with NEXT_PUBLIC_ prefix
   env: {
     CUSTOM_KEY: process.env.CUSTOM_KEY,
+    // URLs are automatically exposed via NEXT_PUBLIC_* environment variables
+    // Set these in your .env.local or .env file:
+    // NEXT_PUBLIC_API_URL=https://api.yourdomain.com/api
+    // NEXT_PUBLIC_SOCKET_URL=https://api.yourdomain.com
   },
 };
 

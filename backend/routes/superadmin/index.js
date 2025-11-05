@@ -649,7 +649,7 @@ router.post('/settings/reset', authenticateToken, requireSuperAdmin, async (req,
     // Recreate default settings
     const defaultSettings = [
       { setting_key: 'site_name', value: 'NxChat', category: 'general', description: 'The name of the application' },
-      { setting_key: 'site_url', value: 'http://localhost:3000', category: 'general', description: 'The base URL of the application' },
+      { setting_key: 'site_url', value: require('../../config/urls').getFrontendUrl(), category: 'general', description: 'The base URL of the application' },
       { setting_key: 'support_email', value: 'support@nxchat.com', category: 'general', description: 'Support email address' },
       { setting_key: 'enable_registration', value: 'true', category: 'security', description: 'Whether new user registration is enabled' },
       { setting_key: 'require_email_verification', value: 'false', category: 'security', description: 'Whether email verification is required for new users' },
@@ -916,7 +916,7 @@ router.post('/companies/:companyId/widget-key', authenticateToken, requireSuperA
       success: true,
       data: {
         widgetKey,
-        snippetUrl: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/widget/snippet.js?key=${widgetKey.key}`
+        snippetUrl: require('../../config/urls').getWidgetUrl(widgetKey.key)
       }
     });
   } catch (error) {

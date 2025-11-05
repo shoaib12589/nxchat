@@ -55,12 +55,10 @@ const corsOptions = {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
     
-    const allowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      process.env.FRONTEND_URL,
-      process.env.BACKEND_URL
-    ].filter(Boolean);
+    // Import centralized URL config
+    const { getAllowedOrigins } = require('../../config/urls');
+    
+    const allowedOrigins = getAllowedOrigins();
     
     if (allowedOrigins.includes(origin)) {
       callback(null, true);

@@ -99,7 +99,8 @@ const register = async (req, res) => {
       });
 
       console.log(`Generated widget key for company ${company.name}: ${widgetKey.key}`);
-      console.log(`Widget snippet URL: ${process.env.FRONTEND_URL || 'http://localhost:3001'}/widget/snippet.js?key=${widgetKey.key}`);
+      const { getWidgetUrl } = require('../../config/urls');
+      console.log(`Widget snippet URL: ${getWidgetUrl(widgetKey.key)}`);
 
       // Send verification email
       // await emailService.sendVerificationEmail(user.email, emailVerificationToken);
