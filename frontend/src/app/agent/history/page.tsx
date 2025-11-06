@@ -110,6 +110,7 @@ const HistoryPage: React.FC = () => {
   const getDateRange = (range: string) => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    today.setHours(0, 0, 0, 0); // Start of today
     
     switch (range) {
       case 'today':
@@ -150,25 +151,43 @@ const HistoryPage: React.FC = () => {
         setLoading(true);
       }
       
-      // Build query parameters
-      const queryParams: any = {
-        status: filters.status,
-        search: filters.search,
-        source: filters.source
-      };
+      // Build query parameters - only send non-empty values
+      const queryParams: any = {};
+      
+      // Status filter - map to backend status values
+      if (filters.status && filters.status !== 'all') {
+        queryParams.status = filters.status;
+      }
+      
+      // Search filter
+      if (filters.search && filters.search.trim()) {
+        queryParams.search = filters.search.trim();
+      }
+      
+      // Source filter
+      if (filters.source && filters.source !== 'all') {
+        queryParams.source = filters.source;
+      }
       
       // Add date range if not 'all'
       if (filters.dateRange !== 'all') {
         if (filters.dateRange === 'custom') {
-          if (filters.startDate) queryParams.startDate = filters.startDate;
-          if (filters.endDate) queryParams.endDate = filters.endDate;
+          if (filters.startDate) {
+            queryParams.startDate = filters.startDate;
+          }
+          if (filters.endDate) {
+            queryParams.endDate = filters.endDate;
+          }
         } else {
           const dateRange = getDateRange(filters.dateRange);
-          if (dateRange.startDate) queryParams.startDate = dateRange.startDate;
-          if (dateRange.endDate) queryParams.endDate = dateRange.endDate;
+          if (dateRange.startDate) {
+            queryParams.startDate = dateRange.startDate;
+          }
+          if (dateRange.endDate) {
+            queryParams.endDate = dateRange.endDate;
+          }
         }
       }
-      
       const response = await apiClient.getVisitorHistory(queryParams);
       
       if (response.success) {
@@ -334,10 +353,27 @@ const HistoryPage: React.FC = () => {
     return 'Direct';
   };
 
-  // Visitor categorization
+  // Helper function to get visitor status for filtering
+  const getVisitorStatus = (visitor: Visitor): string => {
+    if (visitor.status === 'offline') {
+      if (visitor.assignedAgent && visitor.assignedAgent.id) {
+        return 'end_chat';
+      } else if (visitor.messagesCount > 0) {
+        return 'ai_chat';
+      } else {
+        return 'left';
+      }
+    } else if (visitor.status === 'idle') {
+      return 'end_chat';
+    }
+    return 'offline';
+  };
+
+  // Visitor categorization - filters are now applied on the backend via API
+  // This function just returns all visitors from the API (already filtered)
   const getHistoryVisitors = () => {
     return visitors.filter(visitor => {
-      // Show only visitors who are offline or have completed
+      // Show only visitors who are offline or have completed (backend should already filter this)
       return visitor.status === 'offline' || visitor.status === 'idle';
     });
   };
@@ -378,7 +414,6 @@ const HistoryPage: React.FC = () => {
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Viewing</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Referrer</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Visits</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Messages</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Activity</th>
                     </tr>
                   </thead>
@@ -457,13 +492,6 @@ const HistoryPage: React.FC = () => {
                           </span>
                         </td>
 
-                        {/* Messages Column */}
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <span className="text-sm text-gray-900">
-                            {visitor.messagesCount > 0 ? visitor.messagesCount : '-'}
-                          </span>
-                        </td>
-
                         {/* Last Activity Column */}
                         <td className="px-4 py-3 whitespace-nowrap">
                           <span className="text-sm text-gray-500">
@@ -497,25 +525,6 @@ const HistoryPage: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center space-x-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-              <Input
-              placeholder="Search visitors"
-                value={filters.search}
-              onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-              className="pl-10 w-64"
-              />
-            </div>
-          <Select value={filters.status} onValueChange={(value) => setFilters(prev => ({ ...prev, status: value }))}>
-            <SelectTrigger className="w-40">
-                <SelectValue placeholder="All Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="offline">Offline</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-              </SelectContent>
-            </Select>
           <Button
             variant="outline"
             size="sm"
@@ -528,6 +537,111 @@ const HistoryPage: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/* Filters Section - Single Row */}
+      <Card className="border-gray-200">
+        <CardContent className="p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Date Range Filter */}
+            <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+              <Calendar className="w-4 h-4 text-gray-500" />
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant={filters.dateRange === 'today' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setFilters(prev => ({ ...prev, dateRange: 'today', startDate: undefined, endDate: undefined }))}
+                  className={`h-7 px-3 text-xs ${filters.dateRange === 'today' ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'hover:bg-gray-100'}`}
+                >
+                  Today
+                </Button>
+                <Button
+                  variant={filters.dateRange === 'yesterday' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setFilters(prev => ({ ...prev, dateRange: 'yesterday', startDate: undefined, endDate: undefined }))}
+                  className={`h-7 px-3 text-xs ${filters.dateRange === 'yesterday' ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'hover:bg-gray-100'}`}
+                >
+                  Yesterday
+                </Button>
+                <Button
+                  variant={filters.dateRange === 'custom' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setFilters(prev => ({ ...prev, dateRange: 'custom' }))}
+                  className={`h-7 px-3 text-xs ${filters.dateRange === 'custom' ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'hover:bg-gray-100'}`}
+                >
+                  Custom
+                </Button>
+                <Button
+                  variant={filters.dateRange === 'all' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setFilters(prev => ({ ...prev, dateRange: 'all', startDate: undefined, endDate: undefined }))}
+                  className={`h-7 px-3 text-xs ${filters.dateRange === 'all' ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'hover:bg-gray-100'}`}
+                >
+                  All Time
+                </Button>
+              </div>
+              {filters.dateRange === 'custom' && (
+                <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-300">
+                  <Input
+                    type="date"
+                    value={filters.startDate || ''}
+                    onChange={(e) => setFilters(prev => ({ ...prev, startDate: e.target.value }))}
+                    className="h-7 w-32 text-xs"
+                  />
+                  <span className="text-xs text-gray-500">to</span>
+                  <Input
+                    type="date"
+                    value={filters.endDate || ''}
+                    onChange={(e) => setFilters(prev => ({ ...prev, endDate: e.target.value }))}
+                    className="h-7 w-32 text-xs"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Search Bar */}
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <Input
+                placeholder="Search visitors..."
+                value={filters.search}
+                onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+                className="pl-10 h-9 bg-white"
+              />
+            </div>
+
+            {/* Status Filter */}
+            <Select value={filters.status} onValueChange={(value) => setFilters(prev => ({ ...prev, status: value }))}>
+              <SelectTrigger className="w-[140px] h-9 bg-white">
+                <SelectValue placeholder="All Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="offline">Offline</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
+                <SelectItem value="end_chat">End Chat</SelectItem>
+                <SelectItem value="ai_chat">AI Chat</SelectItem>
+                <SelectItem value="left">Visitor Left</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {/* Source Filter */}
+            <Select value={filters.source} onValueChange={(value) => setFilters(prev => ({ ...prev, source: value }))}>
+              <SelectTrigger className="w-[140px] h-9 bg-white">
+                <SelectValue placeholder="All Sources" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Sources</SelectItem>
+                <SelectItem value="direct">Direct</SelectItem>
+                <SelectItem value="google">Google</SelectItem>
+                <SelectItem value="organic">Organic</SelectItem>
+                <SelectItem value="social">Social</SelectItem>
+                <SelectItem value="email">Email</SelectItem>
+                <SelectItem value="paid">Paid</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* History Section */}
       <div className="space-y-4">
@@ -562,7 +676,6 @@ const HistoryPage: React.FC = () => {
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Brand</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Messages</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Activity</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                     </tr>
@@ -620,13 +733,6 @@ const HistoryPage: React.FC = () => {
                             <Clock className="w-4 h-4 text-gray-400" />
                             <span className="text-sm text-gray-900">{formatDuration(visitor)}</span>
                         </div>
-                        </td>
-
-                        {/* Messages Column */}
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <span className="text-sm text-gray-900">
-                            {visitor.messagesCount > 0 ? visitor.messagesCount : '-'}
-                          </span>
                         </td>
 
                         {/* Last Activity Column */}

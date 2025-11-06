@@ -2655,9 +2655,22 @@ router.get('/visitor-history', authenticateToken, requireAgent, requireTenant, a
     };
 
     // Filter based on status param
-    if (status === 'completed') {
-      // Only show visitors who completed a chat with an agent
-      whereClause.assigned_agent_id = { [Op.ne]: null };
+    if (status && status !== 'all') {
+      if (status === 'completed' || status === 'end_chat') {
+        // Only show visitors who completed a chat with an agent
+        whereClause.assigned_agent_id = { [Op.ne]: null };
+      } else if (status === 'ai_chat') {
+        // Show visitors who had messages but no agent assigned
+        whereClause.assigned_agent_id = { [Op.is]: null };
+        whereClause.messages_count = { [Op.gt]: 0 };
+      } else if (status === 'left') {
+        // Show visitors who left without any interaction
+        whereClause.assigned_agent_id = { [Op.is]: null };
+        whereClause.messages_count = { [Op.eq]: 0 };
+      } else if (status === 'offline') {
+        // Just filter by offline status
+        whereClause.status = 'offline';
+      }
     }
 
     // Add date range filter
@@ -2773,13 +2786,19 @@ router.get('/visitor-history', authenticateToken, requireAgent, requireTenant, a
 
     // Apply search filter if provided
     let filteredVisitors = visitors;
-    if (search) {
-      const searchTerm = search.toLowerCase();
-      filteredVisitors = visitors.filter(visitor => 
-        visitor.name.toLowerCase().includes(searchTerm) ||
-        visitor.email?.toLowerCase().includes(searchTerm) ||
-        visitor.current_page?.toLowerCase().includes(searchTerm)
-      );
+    if (search && search.trim()) {
+      const searchTerm = search.toLowerCase().trim();
+      filteredVisitors = visitors.filter(visitor => {
+        const visitorId = visitor.id ? visitor.id.toLowerCase() : '';
+        const visitorName = visitor.name ? visitor.name.toLowerCase() : '';
+        const visitorEmail = visitor.email ? visitor.email.toLowerCase() : '';
+        const currentPage = visitor.current_page ? visitor.current_page.toLowerCase() : '';
+        
+        return visitorId.includes(searchTerm) ||
+               visitorName.includes(searchTerm) ||
+               visitorEmail.includes(searchTerm) ||
+               currentPage.includes(searchTerm);
+      });
     }
 
     // Transform visitors to include brandName for easier frontend access
