@@ -1,4 +1,5 @@
 const { SystemSetting } = require('../models');
+const { getFrontendUrl } = require('../../config/urls');
 require('dotenv').config();
 
 async function quickRedisSetup() {
@@ -22,7 +23,7 @@ async function quickRedisSetup() {
     } else {
       console.log('Usage: node scripts/quick-redis-setup.js <host> <port> <password> [db]');
       console.log('Example: node scripts/quick-redis-setup.js redis-12345.c12345.us-east-1-4.ec2.redns.redis-cloud.com 12345 your_password 0\n');
-      console.log('Or configure via admin panel at: http://localhost:3000/superadmin/settings\n');
+      console.log(`Or configure via admin panel at: ${getFrontendUrl()}/superadmin/settings\n`);
       process.exit(0);
     }
     

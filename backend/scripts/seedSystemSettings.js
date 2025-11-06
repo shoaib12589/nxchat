@@ -1,5 +1,6 @@
 const { sequelize } = require('../config/database');
 const { SystemSetting } = require('../models');
+const { getFrontendUrl } = require('../../config/urls');
 
 async function seedSystemSettings() {
   try {
@@ -9,7 +10,7 @@ async function seedSystemSettings() {
       // General Settings
       { key: 'site_name', value: 'NxChat', category: 'general', description: 'The name of the application' },
       { key: 'site_description', value: 'Professional Live Chat Platform', category: 'general', description: 'Description of the application' },
-      { key: 'site_url', value: 'http://localhost:3000', category: 'general', description: 'The base URL of the application' },
+      { key: 'site_url', value: getFrontendUrl(), category: 'general', description: 'The base URL of the application' },
       { key: 'support_email', value: 'support@nxchat.com', category: 'general', description: 'Support email address' },
       { key: 'admin_email', value: 'admin@nxchat.com', category: 'general', description: 'Admin email address' },
       

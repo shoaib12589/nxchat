@@ -302,8 +302,21 @@ export const Sidebar: React.FC = () => {
         if (response.success && response.data?.app_logo) {
           setAppLogo(response.data.app_logo);
         }
-      } catch (error) {
-        console.error('Failed to fetch app logo:', error);
+      } catch (error: any) {
+        // Silently fail if:
+        // 1. Backend is offline (network error)
+        // 2. User is not authenticated (401 unauthorized)
+        // 3. User doesn't have permission (403 forbidden)
+        // These are expected behaviors and shouldn't be logged
+        const isExpectedError = 
+          error.code === 'ERR_NETWORK' || 
+          error.message === 'Network Error' ||
+          error.response?.status === 401 ||
+          error.response?.status === 403;
+        
+        if (!isExpectedError) {
+          console.error('Failed to fetch app logo:', error);
+        }
       }
     };
     fetchAppLogo();

@@ -31,8 +31,12 @@ export default function LoginPage() {
       try {
         const response = await apiClient.getRegistrationStatus();
         setRegistrationEnabled(response.enabled);
-      } catch (error) {
-        console.error('Failed to check registration status:', error);
+      } catch (error: any) {
+        // Silently fail if backend is offline - this is expected behavior
+        // Only log non-network errors
+        if (error.code !== 'ERR_NETWORK' && error.message !== 'Network Error') {
+          console.error('Failed to check registration status:', error);
+        }
         // On error, assume registration is enabled
         setRegistrationEnabled(true);
       }

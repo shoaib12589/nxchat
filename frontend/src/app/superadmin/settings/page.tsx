@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,6 +49,7 @@ import { motion } from 'framer-motion';
 import apiClient from '@/lib/api';
 import { SystemSetting } from '@/types';
 import { toast } from 'sonner';
+import { useAuthStore } from '@/stores/authStore';
 
 interface SettingsData {
   [key: string]: string;
@@ -186,6 +188,8 @@ interface SystemStatus {
 }
 
 export default function SettingsPage() {
+  const router = useRouter();
+  const { isAuthenticated, isLoading: authLoading, user } = useAuthStore();
   const [settings, setSettings] = useState<SettingsData>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -216,9 +220,18 @@ export default function SettingsPage() {
   const [logoUploading, setLogoUploading] = useState(false);
   const [faviconUploading, setFaviconUploading] = useState(false);
 
+  // Check authentication before fetching settings
   useEffect(() => {
-    fetchSettings();
-  }, []);
+    if (!authLoading) {
+      if (!isAuthenticated || !user || user.role !== 'super_admin') {
+        router.push('/login');
+        return;
+      }
+      // Only fetch if authenticated and has super_admin role
+      fetchSettings();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, isAuthenticated, user, router]);
 
   // Auto-load system status when status tab is selected
   useEffect(() => {
@@ -370,6 +383,25 @@ export default function SettingsPage() {
       console.error('❌ Error fetching settings:', error);
       console.error('❌ Error response:', error.response?.data);
       console.error('❌ Error status:', error.response?.status);
+      
+      // Handle 401 Unauthorized - redirect to login
+      if (error.response?.status === 401) {
+        console.warn('⚠️ Unauthorized access - redirecting to login');
+        localStorage.removeItem('token');
+        localStorage.removeItem('refresh_token');
+        toast.error('Session expired. Please login again.');
+        router.push('/login');
+        return;
+      }
+      
+      // Handle 403 Forbidden - user doesn't have permission
+      if (error.response?.status === 403) {
+        console.warn('⚠️ Forbidden - user does not have super admin access');
+        toast.error('You do not have permission to access this page.');
+        router.push('/login');
+        return;
+      }
+      
       setError(error.message || 'Failed to fetch settings');
     } finally {
       setLoading(false);
@@ -432,7 +464,7 @@ export default function SettingsPage() {
     if (value === undefined || value === null) {
       return defaultValue;
     }
-    return value === 'true' || value === true;
+    return value === 'true';
   };
 
   // Redis Configuration Functions
@@ -639,7 +671,7 @@ export default function SettingsPage() {
                   <Label htmlFor="site_url">Site URL</Label>
                   <Input
                     id="site_url"
-                    value={getSettingValue('site_url', 'http://localhost:3000')}
+                    value={getSettingValue('site_url', process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3000')}
                     onChange={(e) => updateSetting('site_url', e.target.value)}
                     placeholder="https://your-domain.com"
                   />

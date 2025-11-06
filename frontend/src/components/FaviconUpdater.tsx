@@ -2,10 +2,19 @@
 
 import { useEffect } from 'react';
 import apiClient from '@/lib/api';
+import { useAuthStore } from '@/stores/authStore';
 
 export const FaviconUpdater: React.FC = () => {
+  const { isAuthenticated, user } = useAuthStore();
+
   useEffect(() => {
     const updateFavicon = async () => {
+      // Only fetch favicon if user is authenticated and has super_admin role
+      // This prevents 401 errors on login page
+      if (!isAuthenticated || !user || user.role !== 'super_admin') {
+        return;
+      }
+
       try {
         const response = await apiClient.getSystemSettings();
         if (response.success && response.data?.app_favicon) {
@@ -61,13 +70,26 @@ export const FaviconUpdater: React.FC = () => {
 
           console.log('✅ Favicon updated:', faviconUrl);
         }
-      } catch (error) {
-        console.error('Failed to update favicon:', error);
+      } catch (error: any) {
+        // Silently fail if:
+        // 1. Backend is offline (network error)
+        // 2. User is not authenticated (401 unauthorized)
+        // 3. User doesn't have permission (403 forbidden)
+        // These are expected behaviors and shouldn't be logged
+        const isExpectedError = 
+          error.code === 'ERR_NETWORK' || 
+          error.message === 'Network Error' ||
+          error.response?.status === 401 ||
+          error.response?.status === 403;
+        
+        if (!isExpectedError) {
+          console.error('Failed to update favicon:', error);
+        }
       }
     };
 
     updateFavicon();
-  }, []);
+  }, [isAuthenticated, user]);
 
   return null;
 };

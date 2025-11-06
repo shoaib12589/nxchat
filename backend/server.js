@@ -411,9 +411,11 @@ const startServer = async () => {
     await setupDatabase();
 
     const PORT = process.env.PORT || 3001;
+    const { getBackendUrl } = require('../config/urls');
+    const backendUrl = getBackendUrl();
     server.listen(PORT, () => {
       console.log(`🚀 NxChat server running on port ${PORT}`);
-      console.log(`📊 Health check: http://localhost:${PORT}/health`);
+      console.log(`📊 Health check: ${backendUrl}/health`);
       console.log(`🔌 Socket.io server ready`);
     });
   } catch (error) {

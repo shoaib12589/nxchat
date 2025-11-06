@@ -193,7 +193,8 @@ export default function BrandSettingsPage() {
   const copyEmbedCode = () => {
     if (!brand) return;
     
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+    // Use API URL from environment, removing /api suffix for widget URL
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
     const brandKey = brand.widgetKeys?.[0]?.key;
     
     if (!brandKey) {
@@ -204,7 +205,7 @@ export default function BrandSettingsPage() {
     const embedCode = `<script>
 (function() {
   var script = document.createElement('script');
-  script.src = '${backendUrl}/widget/snippet.js?key=${brandKey}';
+  script.src = '${baseUrl}/widget/snippet.js?key=${brandKey}';
   document.head.appendChild(script);
 })();
 </script>`;
@@ -796,7 +797,7 @@ export default function BrandSettingsPage() {
                   value={brand.widgetKeys?.[0]?.key ? `<script>
 (function() {
   var script = document.createElement('script');
-  script.src = '${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/widget/snippet.js?key=${brand.widgetKeys[0].key}';
+  script.src = '${(process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001')}/widget/snippet.js?key=${brand.widgetKeys[0].key}';
   document.head.appendChild(script);
 })();
 </script>` : 'No widget key available'}

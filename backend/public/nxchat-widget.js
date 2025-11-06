@@ -232,6 +232,12 @@ let onlineAgents = []; // Store online agents with avatars
     socket.on('disconnect', () => {
       console.log('Widget disconnected from server');
       isConnected = false;
+      
+      // When socket disconnects, mark visitor as offline
+      // This handles cases where the browser/tab closes abruptly
+      if (visitorId) {
+        updateVisitorStatus('offline');
+      }
     });
     
     socket.on('connect_error', (error) => {
@@ -4634,21 +4640,40 @@ let onlineAgents = []; // Store online agents with avatars
     // Track initial page view
     trackVisitorActivity();
 
-    // Track page visibility changes
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        updateVisitorStatus('away');
-      } else {
-        updateVisitorStatus('online');
-        trackVisitorActivity();
-      }
-    });
-
-    // Track page unload
+    // Track page unload - use multiple events for better detection
     window.addEventListener('beforeunload', () => {
       updateVisitorStatus('offline');
       // Clear session ID on page unload (but keep visitor ID)
       localStorage.removeItem(`nxchat_session_id_${CONFIG.tenantId}`);
+    });
+    
+    // Also track pagehide event (more reliable than beforeunload)
+    window.addEventListener('pagehide', () => {
+      updateVisitorStatus('offline');
+      // Disconnect socket if still connected
+      if (socket && socket.connected) {
+        socket.disconnect();
+      }
+    });
+    
+    // Track visibility change - when tab becomes hidden, mark as away
+    // When tab is closed, browser will trigger pagehide/beforeunload
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        // Tab is now hidden - could be minimized, switched tab, or closing
+        // Use a timeout to detect if it's actually closing
+        setTimeout(() => {
+          // If still hidden after 2 seconds, might be closing
+          // But we'll rely on pagehide/beforeunload for actual closes
+          if (document.hidden) {
+            updateVisitorStatus('away');
+          }
+        }, 2000);
+      } else {
+        // Tab is visible again
+        updateVisitorStatus('online');
+        trackVisitorActivity();
+      }
     });
 
     // Track mouse movement for activity

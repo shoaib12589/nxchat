@@ -1,9 +1,13 @@
 const jwt = require('jsonwebtoken');
 const { User, Chat, Message, Company, Visitor, VisitorMessage } = require('../models');
 
+// Track visitor socket connections (visitorId -> Set of socket IDs)
+const visitorSockets = new Map();
+
 const chatSocket = (io, socket) => {
   let currentUser = null;
   let currentChat = null;
+  let visitorId = null; // Track visitor ID for this socket
 
   // Get current user from socket (set by centralized auth)
   currentUser = socket.currentUser;
@@ -11,24 +15,34 @@ const chatSocket = (io, socket) => {
   // Handle visitor room joining (for widget and agents)
   socket.on('join_visitor_room', (data) => {
     try {
-      const { visitorId } = data;
+      const { visitorId: dataVisitorId } = data;
       
-      if (!visitorId) {
+      if (!dataVisitorId) {
         console.log('No visitor ID provided for room join');
         socket.emit('error', { message: 'No visitor ID provided' });
         return;
       }
       
+      // Store visitor ID for this socket
+      visitorId = dataVisitorId;
+      socket.visitorId = dataVisitorId;
+      
+      // Track visitor socket connection
+      if (!visitorSockets.has(dataVisitorId)) {
+        visitorSockets.set(dataVisitorId, new Set());
+      }
+      visitorSockets.get(dataVisitorId).add(socket.id);
+      
       // Join visitor-specific room
-      const roomName = `visitor_${visitorId}`;
+      const roomName = `visitor_${dataVisitorId}`;
       socket.join(roomName);
-      const userRole = currentUser?.role || 'unknown';
+      const userRole = currentUser?.role || 'visitor';
       const userName = currentUser?.name || socket.id;
-      console.log(`${userRole} ${userName} joined visitor room: ${roomName}`);
+      console.log(`${userRole} ${userName} joined visitor room: ${roomName} (socket: ${socket.id})`);
       
       socket.emit('visitor_room_joined', { 
         success: true, 
-        visitorId: visitorId,
+        visitorId: dataVisitorId,
         roomName: roomName
       });
       
@@ -658,7 +672,60 @@ const chatSocket = (io, socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
+    // Handle visitor disconnect
+    if (visitorId || socket.visitorId) {
+      const disconnectedVisitorId = visitorId || socket.visitorId;
+      console.log(`🚪 Visitor socket disconnected: ${disconnectedVisitorId} (socket: ${socket.id})`);
+      
+      // Remove socket from tracking
+      if (visitorSockets.has(disconnectedVisitorId)) {
+        visitorSockets.get(disconnectedVisitorId).delete(socket.id);
+        
+        // If no more sockets for this visitor, mark them as offline
+        if (visitorSockets.get(disconnectedVisitorId).size === 0) {
+          visitorSockets.delete(disconnectedVisitorId);
+          
+          try {
+            // Update visitor status to offline in database
+            const visitor = await Visitor.findByPk(disconnectedVisitorId);
+            if (visitor && visitor.status !== 'offline') {
+              const oldStatus = visitor.status;
+              await visitor.update({
+                status: 'offline',
+                last_activity: new Date()
+              });
+              
+              console.log(`✅ Updated visitor ${disconnectedVisitorId} status to offline`);
+              
+              // Emit visitor:leave event to agents
+              // Get visitor's brand_id and tenant_id for proper room emission
+              const visitorWithRelations = await Visitor.findByPk(disconnectedVisitorId, {
+                attributes: ['id', 'brand_id', 'tenant_id']
+              });
+              
+              if (visitorWithRelations) {
+                // Emit to brand-specific room if available
+                if (visitorWithRelations.brand_id) {
+                  io.to(`brand_${visitorWithRelations.brand_id}`).emit('visitor:leave', disconnectedVisitorId);
+                  console.log(`📢 Emitted visitor:leave to brand room: brand_${visitorWithRelations.brand_id}`);
+                }
+                
+                // Also emit to tenant room as fallback
+                if (visitorWithRelations.tenant_id) {
+                  io.to(`tenant_${visitorWithRelations.tenant_id}`).emit('visitor:leave', disconnectedVisitorId);
+                  console.log(`📢 Emitted visitor:leave to tenant room: tenant_${visitorWithRelations.tenant_id}`);
+                }
+              }
+            }
+          } catch (error) {
+            console.error('Error handling visitor disconnect:', error);
+          }
+        }
+      }
+    }
+    
+    // Handle authenticated user disconnect
     if (currentUser) {
       console.log(`User ${currentUser.name} disconnected`);
       
@@ -668,10 +735,12 @@ const chatSocket = (io, socket) => {
           user: currentUser.toJSON()
         });
       }
-    } else {
+    } else if (!visitorId && !socket.visitorId) {
       console.log(`Unauthenticated socket disconnected: ${socket.id}`);
     }
   });
 };
 
 module.exports = chatSocket;
+// Export visitorSockets map for use in other modules if needed
+module.exports.visitorSockets = visitorSockets;

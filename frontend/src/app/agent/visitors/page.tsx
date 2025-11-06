@@ -529,6 +529,7 @@ export default function VisitorsPage() {
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const [availableAgents, setAvailableAgents] = useState<any[]>([]);
   const [transferring, setTransferring] = useState(false);
+  const [currentTime, setCurrentTime] = useState(Date.now()); // For auto-updating duration display
   const { socket } = useSocket();
   const { user } = useAuthStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -558,6 +559,15 @@ export default function VisitorsPage() {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
+  }, []);
+
+  // Auto-update timer for visitor online time display (updates every second)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000); // Update every second
+
+    return () => clearInterval(interval);
   }, []);
 
   // Show browser notification
@@ -784,32 +794,53 @@ export default function VisitorsPage() {
         if (prev.length === 0) return prev;
         
         const now = Date.now();
-        const INACTIVITY_THRESHOLD = 5 * 60 * 1000; // 5 minutes of no activity = offline (visitor likely disconnected)
+        // Only remove visitors who have been inactive for more than 30 minutes (truly offline/disconnected)
+        // This gives time for visitors to become idle (15 min) before being removed
+        const INACTIVITY_THRESHOLD = 30 * 60 * 1000; // 30 minutes of no activity = truly offline
         
         let hasChanges = false;
         const updatedVisitors = prev.map(visitor => {
           // Skip if visitor is already offline
-          if (visitor.status === 'offline') return visitor;
+          if (visitor.status === 'offline') {
+            // Remove offline visitors immediately
+            hasChanges = true;
+            return null;
+          }
           
           // Check if visitor has last_activity timestamp
           if (visitor.lastActivity) {
             const lastActivityTime = new Date(visitor.lastActivity).getTime();
+            if (isNaN(lastActivityTime)) {
+              // Invalid date, remove visitor
+              hasChanges = true;
+              return null;
+            }
+            
             const timeSinceActivity = now - lastActivityTime;
             
-            // If visitor has been inactive for more than threshold, remove from list (move to History)
-            if (timeSinceActivity > INACTIVITY_THRESHOLD) {
-              console.log(`⚠️ Visitor ${visitor.id} removed due to inactivity (${Math.round(timeSinceActivity / 1000 / 60)}m). Moving to History.`);
+            // Only remove if visitor has been inactive for more than 30 minutes
+            // Visitors with 15-30 min inactivity will be in Idle list
+            // Visitors with <15 min inactivity will be in Active list
+            if (timeSinceActivity > INACTIVITY_THRESHOLD && !visitor.isTyping) {
+              console.log(`🚪 Visitor ${visitor.id} removed due to extended inactivity (${Math.round(timeSinceActivity / 1000 / 60)}m). Moving to History.`);
               hasChanges = true;
-              
-              // Remove visitor from list - they should be in History page
-              // Don't return this visitor (filter it out)
               return null;
             }
           } else {
-            // If no last activity timestamp, remove from list (move to History)
-            hasChanges = true;
-            console.log(`⚠️ Visitor ${visitor.id} removed - no activity data. Moving to History.`);
-            return null;
+            // If no last activity timestamp but visitor is online, keep them
+            // They might be new or just connected
+            // Only remove if they've been in the list for a very long time without activity
+            if (visitor.createdAt) {
+              const createdAtTime = new Date(visitor.createdAt).getTime();
+              if (!isNaN(createdAtTime)) {
+                const timeSinceCreation = now - createdAtTime;
+                // If visitor was created more than 30 minutes ago and has no activity, remove
+                if (timeSinceCreation > INACTIVITY_THRESHOLD) {
+                  hasChanges = true;
+                  return null;
+                }
+              }
+            }
           }
           
           return visitor;
@@ -820,7 +851,7 @@ export default function VisitorsPage() {
       });
     };
 
-    // Check every 30 seconds for activity gaps
+    // Check every 30 seconds for truly offline visitors
     const interval = setInterval(checkVisitorActivity, 30 * 1000);
     
     // Initial check after a delay
@@ -1174,6 +1205,13 @@ export default function VisitorsPage() {
     // Listen for visitor status changes
     socket.on('visitor:status', (data: { visitorId: string; status: string }) => {
       setVisitors(prev => {
+        // If visitor goes offline, remove them from the list (they should be in History)
+        if (data.status === 'offline') {
+          console.log(`🚪 Visitor ${data.visitorId} went offline, removing from list`);
+          return prev.filter(visitor => visitor.id !== data.visitorId);
+        }
+        
+        // Update status for online visitors
         return prev.map(visitor => {
           if (visitor.id === data.visitorId) {
             // Only update if status actually changed
@@ -2351,9 +2389,27 @@ export default function VisitorsPage() {
         
         console.log(`Loaded ${uniqueVisitors.length} unique visitors`);
         
-        // Filter out offline visitors - only show visitors who are still online
-        const onlineVisitors = uniqueVisitors.filter((v: Visitor) => v.status !== 'offline');
-        console.log(`Filtered to ${onlineVisitors.length} online visitors`);
+        // Filter out offline visitors and visitors who have been inactive for too long
+        // Only show visitors who are currently online/active
+        const now = Date.now();
+        const INACTIVITY_THRESHOLD = 30 * 60 * 1000; // 30 minutes - only show truly inactive visitors as offline
+        const onlineVisitors = uniqueVisitors.filter((v: Visitor) => {
+          // Exclude offline visitors
+          if (v.status === 'offline') return false;
+          
+          // Exclude visitors who have been inactive for more than 30 minutes (should be in history)
+          if (v.lastActivity) {
+            const lastActivityTime = new Date(v.lastActivity).getTime();
+            const timeSinceActivity = now - lastActivityTime;
+            // Only exclude if they're truly inactive (not just idle)
+            if (timeSinceActivity > INACTIVITY_THRESHOLD && !v.isTyping) {
+              return false;
+            }
+          }
+          
+          return true;
+        });
+        console.log(`Filtered to ${onlineVisitors.length} active online visitors`);
         
         setVisitors(onlineVisitors);
         setVisitorIds(new Set(onlineVisitors.map((v: Visitor) => v.id)));
@@ -2983,12 +3039,17 @@ export default function VisitorsPage() {
   };
 
   const formatDuration = (visitor: Visitor) => {
-    // Calculate total time since visitor first loaded the chat widget (createdAt)
-    const now = new Date();
-    const createdAt = new Date(visitor.createdAt);
-    const diffInSeconds = Math.floor((now.getTime() - createdAt.getTime()) / 1000);
+    // Use currentTime state to ensure the duration updates automatically
+    const now = currentTime;
+    const createdAt = visitor.createdAt ? new Date(visitor.createdAt).getTime() : null;
     
-    // If visitor is offline, show session duration instead
+    if (!createdAt || isNaN(createdAt)) {
+      return 'Just now';
+    }
+    
+    const diffInSeconds = Math.floor((now - createdAt) / 1000);
+    
+    // If visitor is offline, show session duration instead (static)
     if (visitor.status === 'offline' && visitor.sessionDuration) {
       const seconds = parseInt(visitor.sessionDuration);
       const hours = Math.floor(seconds / 3600);
@@ -3004,9 +3065,9 @@ export default function VisitorsPage() {
       }
     }
     
-    // For online/away visitors, show total time since first widget load
+    // For online/away/idle visitors, show live time since first widget load (auto-updates)
     if (diffInSeconds < 0) return 'Just now';
-    if (diffInSeconds < 60) return 'Just now';
+    if (diffInSeconds < 60) return `${diffInSeconds}s`;
     
     const minutes = Math.floor(diffInSeconds / 60);
     const hours = Math.floor(minutes / 60);
@@ -3098,64 +3159,11 @@ export default function VisitorsPage() {
     });
   };
 
-  // Get active visitors - visitors who are currently active (within last 15 minutes)
-  // Includes: recent activity, widget status changes (minimized/maximized), auto messages, typing
+  // Get active visitors - visitors who are currently online and active
+  // A visitor stays active as long as they are online and have activity within 15 minutes
+  // Visitors remain in active list until they become idle (15+ min inactive) or go offline
   const getActiveVisitors = () => {
-    const now = Date.now();
-    const ACTIVITY_THRESHOLD = 15 * 60 * 1000; // 15 minutes
-    
-    return visitors.filter(visitor => {
-      // Skip offline visitors (they should be in History)
-      if (visitor.status === 'offline') return false;
-      
-      // Skip transferred visitors (they should be in Transfer Chats accordion)
-      // Skip if status is 'waiting_for_agent' AND no assigned agent (in transfer pool)
-      if (visitor.status === 'waiting_for_agent' && (!visitor.assignedAgent || !visitor.assignedAgent.id)) return false;
-      
-      // Check if visitor has recent activity (within last 15 minutes)
-      const hasRecentActivity = visitor.lastActivity && 
-        (now - new Date(visitor.lastActivity).getTime()) < ACTIVITY_THRESHOLD;
-      
-      // Check if visitor is typing
-      const isActivelyTyping = visitor.isTyping;
-      
-      // Check if widget status changed recently (minimized/maximized) - keep in active
-      // Widget status changes indicate visitor activity
-      const hasRecentWidgetActivity = visitor.lastWidgetUpdate && 
-        (now - new Date(visitor.lastWidgetUpdate).getTime()) < ACTIVITY_THRESHOLD;
-      
-      // Visitors with widget status changes (minimized/maximized) should stay in Active
-      const hasWidgetStatus = visitor.widgetStatus === 'minimized' || visitor.widgetStatus === 'maximized';
-      
-      // Auto message popups would also indicate activity - check for recent messages
-      const hasRecentMessages = visitor.messagesCount > 0 && visitor.lastActivity &&
-        (now - new Date(visitor.lastActivity).getTime()) < ACTIVITY_THRESHOLD;
-      
-      // Visitor is active if: recent activity OR typing OR widget status change OR recent messages
-      const isActive = hasRecentActivity || isActivelyTyping || 
-        (hasWidgetStatus && hasRecentWidgetActivity) || hasRecentMessages;
-      
-      if (isActive) {
-        console.log(`✅ Active visitor ${visitor.id}:`, {
-          status: visitor.status,
-          hasRecentActivity,
-          isActivelyTyping,
-          hasWidgetStatus,
-          hasRecentWidgetActivity,
-          hasRecentMessages,
-          lastActivity: visitor.lastActivity,
-          minutesSinceActivity: visitor.lastActivity ? Math.round((now - new Date(visitor.lastActivity).getTime()) / (60 * 1000)) : 'N/A',
-          widgetStatus: visitor.widgetStatus,
-          lastWidgetUpdate: visitor.lastWidgetUpdate
-        });
-      }
-      
-      return isActive;
-    });
-  };
-
-  const getIdleVisitors = () => {
-    const now = Date.now();
+    const now = currentTime; // Use currentTime for real-time updates
     const IDLE_THRESHOLD = 15 * 60 * 1000; // 15 minutes of inactivity = idle
     
     return visitors.filter(visitor => {
@@ -3166,54 +3174,99 @@ export default function VisitorsPage() {
       // Skip if status is 'waiting_for_agent' AND no assigned agent (in transfer pool)
       if (visitor.status === 'waiting_for_agent' && (!visitor.assignedAgent || !visitor.assignedAgent.id)) return false;
       
+      // If visitor is actively typing, they are definitely active
+      if (visitor.isTyping) return true;
+      
+      // Check if visitor has recent activity (within last 15 minutes)
+      let hasRecentActivity = false;
+      if (visitor.lastActivity) {
+        const lastActivityTime = new Date(visitor.lastActivity).getTime();
+        if (!isNaN(lastActivityTime)) {
+          const timeSinceActivity = now - lastActivityTime;
+          hasRecentActivity = timeSinceActivity < IDLE_THRESHOLD && timeSinceActivity >= 0;
+        }
+      }
+      
+      // Check if widget status changed recently (minimized/maximized) - keep in active
+      let hasRecentWidgetActivity = false;
+      if (visitor.lastWidgetUpdate) {
+        const lastWidgetUpdateTime = new Date(visitor.lastWidgetUpdate).getTime();
+        if (!isNaN(lastWidgetUpdateTime)) {
+          hasRecentWidgetActivity = (now - lastWidgetUpdateTime) < IDLE_THRESHOLD && (now - lastWidgetUpdateTime) >= 0;
+        }
+      }
+      
+      // Visitors with widget status changes (minimized/maximized) should stay in Active
+      const hasWidgetStatus = visitor.widgetStatus === 'minimized' || visitor.widgetStatus === 'maximized';
+      
+      // Visitor is active if they have recent activity (within 15 min) or recent widget activity
+      // This ensures visitors stay active until they become idle (15+ min inactive)
+      const isActive = hasRecentActivity || (hasWidgetStatus && hasRecentWidgetActivity);
+      
+      return isActive;
+    });
+  };
+
+  const getIdleVisitors = () => {
+    const now = currentTime; // Use currentTime for real-time updates
+    const IDLE_THRESHOLD = 15 * 60 * 1000; // 15 minutes of inactivity = idle
+    
+    // Get active visitors first to avoid duplicates
+    const activeVisitorIds = new Set(getActiveVisitors().map(v => v.id));
+    
+    return visitors.filter(visitor => {
+      // Skip if already in active list
+      if (activeVisitorIds.has(visitor.id)) return false;
+      
+      // Skip offline visitors (they should be in History)
+      if (visitor.status === 'offline') return false;
+      
+      // Skip transferred visitors (they should be in Transfer Chats accordion)
+      if (visitor.status === 'waiting_for_agent' && (!visitor.assignedAgent || !visitor.assignedAgent.id)) return false;
+      
       // Only show online visitors (exclude away)
+      // Note: offline visitors are already filtered out above, so we only need to check for 'away'
       const isOnline = visitor.status !== 'away';
       if (!isOnline) return false;
       
-      // Require a valid lastActivity timestamp - if missing, don't show in idle
+      // Require a valid lastActivity timestamp
       if (!visitor.lastActivity) {
-        return false; // Don't show visitors without activity data in idle
+        return false;
       }
       
       // Validate that lastActivity is a valid date
       const lastActivityDate = new Date(visitor.lastActivity);
       if (isNaN(lastActivityDate.getTime())) {
-        return false; // Invalid date, don't show in idle
+        return false;
       }
       
       // Calculate time since last activity
       const lastActivityTime = lastActivityDate.getTime();
       const timeSinceActivity = now - lastActivityTime;
       
-      // Visitor is idle if: not actively typing AND inactive for more than 15 minutes
-      const isIdle = !visitor.isTyping && timeSinceActivity >= IDLE_THRESHOLD;
-      
-      // Also check that they're not in Active section (to avoid duplicates)
-      // Active visitors have recent activity or widget status changes
-      const hasRecentActivity = timeSinceActivity < IDLE_THRESHOLD;
-      const hasRecentWidgetActivity = visitor.lastWidgetUpdate && 
-        (now - new Date(visitor.lastWidgetUpdate).getTime()) < IDLE_THRESHOLD;
-      const hasWidgetStatus = visitor.widgetStatus === 'minimized' || visitor.widgetStatus === 'maximized';
-      
-      // Don't show in Idle if they're still considered Active
-      if (hasRecentActivity || (hasWidgetStatus && hasRecentWidgetActivity)) {
-        return false;
+      // Check widget activity
+      let hasRecentWidgetActivity = false;
+      if (visitor.lastWidgetUpdate) {
+        const lastWidgetUpdateTime = new Date(visitor.lastWidgetUpdate).getTime();
+        if (!isNaN(lastWidgetUpdateTime)) {
+          hasRecentWidgetActivity = (now - lastWidgetUpdateTime) < IDLE_THRESHOLD && (now - lastWidgetUpdateTime) >= 0;
+        }
       }
       
-      // Ensure timeSinceActivity is positive (not a future date) and reasonable (not more than 1 year old)
+      // Visitor is idle if:
+      // 1. Not actively typing
+      // 2. Inactive for more than 15 minutes
+      // 3. No recent widget activity
+      // 4. Still online (not offline)
+      // This automatically moves visitors from Active to Idle when they become idle
+      const isIdle = !visitor.isTyping && 
+                     timeSinceActivity >= IDLE_THRESHOLD && 
+                     !hasRecentWidgetActivity &&
+                     isOnline;
+      
+      // Ensure timeSinceActivity is valid (not a future date and reasonable)
       if (timeSinceActivity < 0 || timeSinceActivity > 365 * 24 * 60 * 60 * 1000) {
-        return false; // Invalid time range, don't show in idle
-      }
-      
-      if (isIdle) {
-        console.log(`💤 Idle visitor ${visitor.id}:`, {
-          isOnline,
-          isIdle,
-          timeSinceActivity: Math.round(timeSinceActivity / 1000 / 60) + ' minutes',
-          status: visitor.status,
-          lastActivity: visitor.lastActivity,
-          isTyping: visitor.isTyping
-        });
+        return false;
       }
       
       return isIdle;

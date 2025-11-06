@@ -1,5 +1,6 @@
 const { sequelize } = require('../config/database');
 const { Company, WidgetKey } = require('../models');
+const { getWidgetUrl } = require('../config/urls');
 const crypto = require('crypto');
 
 async function generateWidgetKeys() {
@@ -38,7 +39,7 @@ async function generateWidgetKeys() {
       });
       
       console.log(`Generated widget key for ${company.name} (ID: ${company.id}): ${key}`);
-      console.log(`Widget snippet URL: http://localhost:3001/widget/snippet.js?key=${key}`);
+      console.log(`Widget snippet URL: ${getWidgetUrl(key)}`);
     }
     
     console.log('Widget key generation completed!');

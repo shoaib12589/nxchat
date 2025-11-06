@@ -1,5 +1,6 @@
 const { sequelize } = require('../config/database');
 const { Company, WidgetKey } = require('../models');
+const { getWidgetUrl } = require('../../config/urls');
 
 async function getWidgetKeys() {
   try {
@@ -23,14 +24,14 @@ async function getWidgetKeys() {
     
     widgetKeys.forEach(widgetKey => {
       const company = widgetKey.company;
-      const snippetUrl = `http://localhost:3001/widget/snippet.js?key=${widgetKey.key}`;
+      const snippetUrl = getWidgetUrl(widgetKey.key);
       
       console.log(`| ${company.name} | \`${widgetKey.key}\` | \`${snippetUrl}\` |`);
     });
     
     console.log('\n📝 Usage Example:');
     console.log('```html');
-    console.log('<script src="http://localhost:3001/widget/snippet.js?key=' + widgetKeys[0].key + '"></script>');
+    console.log(`<script src="${getWidgetUrl(widgetKeys[0].key)}"></script>`);
     console.log('```');
     
   } catch (error) {
