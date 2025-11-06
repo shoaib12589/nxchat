@@ -178,12 +178,6 @@ const navigationItems: NavItem[] = [
     roles: ['agent'],
   },
   {
-    title: 'Chats',
-    href: '/agent/chats',
-    icon: MessageSquare,
-    roles: ['agent'],
-  },
-  {
     title: 'Visitors',
     href: '/agent/visitors',
     icon: Users,

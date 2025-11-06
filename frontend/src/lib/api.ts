@@ -559,6 +559,11 @@ class ApiClient {
     return response.data;
   }
 
+  async getAgentDashboardStats(): Promise<ApiResponse> {
+    const response: AxiosResponse<ApiResponse> = await this.client.get('/agent/dashboard/stats');
+    return response.data;
+  }
+
   async getChat(id: number): Promise<ApiResponse> {
     const response: AxiosResponse<ApiResponse> = await this.client.get(`/agent/chats/${id}`);
     return response.data;

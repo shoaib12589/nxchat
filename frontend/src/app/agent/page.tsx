@@ -23,9 +23,24 @@ import apiClient from '@/lib/api';
 import { Chat, Ticket as TicketType } from '@/types';
 import Link from 'next/link';
 
+interface DashboardStats {
+  activeChats: number;
+  openTickets: number;
+  activeVisitors: number;
+  averageResponseTime: number; // in seconds
+  satisfactionRating: number;
+}
+
 export default function AgentDashboard() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [tickets, setTickets] = useState<TicketType[]>([]);
+  const [stats, setStats] = useState<DashboardStats>({
+    activeChats: 0,
+    openTickets: 0,
+    activeVisitors: 0,
+    averageResponseTime: 0,
+    satisfactionRating: 0
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('chats');
@@ -37,23 +52,49 @@ export default function AgentDashboard() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [chatsResponse, ticketsResponse] = await Promise.all([
+      const [chatsResponse, ticketsResponse, statsResponse] = await Promise.all([
         apiClient.getChats({ status: 'active', limit: 10 }),
-        apiClient.getTickets({ status: 'open', limit: 10 })
+        apiClient.getTickets({ status: 'open', limit: 10 }),
+        apiClient.getAgentDashboardStats()
       ]);
 
       if (chatsResponse.success) {
-        setChats(chatsResponse.data.chats || []);
+        setChats(chatsResponse.data.chats || chatsResponse.data || []);
       }
 
       if (ticketsResponse.success) {
-        setTickets(ticketsResponse.data.tickets || []);
+        setTickets(ticketsResponse.data.tickets || ticketsResponse.data || []);
+      }
+
+      if (statsResponse.success && statsResponse.data) {
+        setStats({
+          activeChats: statsResponse.data.activeChats || 0,
+          openTickets: statsResponse.data.openTickets || 0,
+          activeVisitors: statsResponse.data.activeVisitors || 0,
+          averageResponseTime: statsResponse.data.averageResponseTime || 0,
+          satisfactionRating: statsResponse.data.satisfactionRating || 0
+        });
       }
     } catch (error: any) {
+      console.error('Error fetching dashboard data:', error);
       setError(error.message || 'Failed to fetch data');
     } finally {
       setLoading(false);
     }
+  };
+
+  // Format response time
+  const formatResponseTime = (seconds: number) => {
+    if (!seconds || seconds === 0) return 'N/A';
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    if (minutes < 60) {
+      return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
   };
 
   const handleAssignChat = async (chatId: number) => {
@@ -305,7 +346,7 @@ export default function AgentDashboard() {
       </motion.div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         <motion.div
           initial={{ opacity: 0, y: 5 }}
           animate={{ opacity: 1, y: 0 }}
@@ -323,7 +364,7 @@ export default function AgentDashboard() {
                   <MessageSquare className="w-6 h-6 text-blue-600" />
                 </motion.div>
               <div>
-                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">{chats.length}</div>
+                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">{stats.activeChats}</div>
                 <div className="text-sm text-muted-foreground">Active Chats</div>
               </div>
             </div>
@@ -347,7 +388,7 @@ export default function AgentDashboard() {
                   <Ticket className="w-6 h-6 text-green-600" />
                 </motion.div>
               <div>
-                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">{tickets.length}</div>
+                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">{stats.openTickets}</div>
                 <div className="text-sm text-muted-foreground">Open Tickets</div>
               </div>
             </div>
@@ -371,7 +412,7 @@ export default function AgentDashboard() {
                   <Clock className="w-6 h-6 text-yellow-600" />
                 </motion.div>
               <div>
-                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">2m</div>
+                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">{formatResponseTime(stats.averageResponseTime)}</div>
                 <div className="text-sm text-muted-foreground">Avg Response</div>
               </div>
             </div>
@@ -395,8 +436,34 @@ export default function AgentDashboard() {
                   <CheckCircle className="w-6 h-6 text-purple-600" />
                 </motion.div>
               <div>
-                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">4.8</div>
+                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">
+                    {stats.satisfactionRating > 0 ? stats.satisfactionRating.toFixed(1) : 'N/A'}
+                  </div>
                 <div className="text-sm text-muted-foreground">Satisfaction</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, y: 5 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, delay: 0.15 }}
+          whileHover={{ scale: 1.02 }}
+        >
+          <Card className="backdrop-blur-xl bg-gradient-to-br from-white/80 to-white/60 dark:from-gray-800/80 dark:to-gray-700/60 border-white/20 shadow-xl hover:shadow-2xl transition-all duration-300">
+          <CardContent className="p-6">
+              <div className="flex items-center space-x-3">
+                <motion.div 
+                  className="w-12 h-12 bg-gradient-to-br from-indigo-500/20 to-indigo-600/20 backdrop-blur-sm rounded-xl flex items-center justify-center border border-white/10"
+                  whileHover={{ rotate: 360 }}
+                  transition={{ duration: 0.6 }}
+                >
+                  <Users className="w-6 h-6 text-indigo-600" />
+                </motion.div>
+              <div>
+                  <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">{stats.activeVisitors}</div>
+                <div className="text-sm text-muted-foreground">Active Visitors</div>
               </div>
             </div>
           </CardContent>

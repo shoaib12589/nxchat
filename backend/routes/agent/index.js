@@ -2081,6 +2081,181 @@ router.get('/workload', authenticateToken, requireAgent, requireTenant, async (r
   }
 });
 
+// Get agent dashboard statistics
+router.get('/dashboard/stats', authenticateToken, requireAgent, requireTenant, async (req, res) => {
+  try {
+    const tenantId = req.user.tenant_id;
+    const agentId = req.user.id;
+    
+    // Get agent's assigned brands
+    const assignedBrands = await BrandAgent.findAll({
+      where: {
+        agent_id: agentId,
+        status: 'active'
+      },
+      attributes: ['brand_id']
+    });
+    
+    const assignedBrandIds = assignedBrands.map(ba => ba.brand_id);
+    
+    // If agent has no brand assignments, return empty stats
+    if (assignedBrandIds.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          activeChats: 0,
+          openTickets: 0,
+          activeVisitors: 0,
+          averageResponseTime: 0,
+          satisfactionRating: 0
+        }
+      });
+    }
+    
+    // Get active chats for this agent (only from assigned brands)
+    const activeChatsCount = await Chat.count({
+      where: {
+        tenant_id: tenantId,
+        agent_id: agentId,
+        status: 'active'
+      }
+    });
+    
+    // Get open tickets for this agent
+    const openTicketsCount = await Ticket.count({
+      where: {
+        tenant_id: tenantId,
+        agent_id: agentId,
+        status: 'open'
+      }
+    });
+    
+    // Get active visitors from assigned brands
+    const activeVisitorsCount = await Visitor.count({
+      where: {
+        tenant_id: tenantId,
+        brand_id: { [Op.in]: assignedBrandIds },
+        status: { [Op.in]: ['online', 'idle', 'away'] }
+      }
+    });
+    
+    // Calculate average response time for this agent's chats
+    // Get completed chats assigned to this agent
+    const completedChats = await Chat.findAll({
+      where: {
+        tenant_id: tenantId,
+        agent_id: agentId,
+        status: { [Op.in]: ['closed', 'completed', 'visitor_left'] }
+      },
+      include: [{
+        model: Message,
+        as: 'messages',
+        attributes: ['id', 'created_at', 'sender_type'],
+        required: false,
+        separate: true,
+        order: [['created_at', 'ASC']]
+      }]
+    });
+    
+    let averageResponseTime = 0; // in seconds
+    if (completedChats.length > 0) {
+      let totalResponseTime = 0;
+      let responseCount = 0;
+      
+      for (const chat of completedChats) {
+        if (!chat.messages || chat.messages.length === 0) continue;
+        
+        let customerMessageTime = null;
+        for (const message of chat.messages) {
+          const isCustomerMessage = message.sender_type === 'customer' || 
+                                   message.sender_type === 'visitor';
+          const isAgentMessage = message.sender_type === 'agent';
+          
+          if (isCustomerMessage) {
+            customerMessageTime = new Date(message.created_at);
+          } else if (customerMessageTime && isAgentMessage) {
+            const agentResponseTime = new Date(message.created_at);
+            const responseTime = (agentResponseTime - customerMessageTime) / 1000; // in seconds
+            if (responseTime > 0 && responseTime < 3600) { // Valid response time (less than 1 hour)
+              totalResponseTime += responseTime;
+              responseCount++;
+              customerMessageTime = null; // Reset to find next customer message
+            }
+          }
+        }
+      }
+      
+      if (responseCount > 0) {
+        averageResponseTime = Math.round(totalResponseTime / responseCount);
+      }
+    }
+    
+    // Calculate satisfaction rating from chat ratings (most reliable source)
+    const ratedChats = completedChats.filter(chat => chat.rating && chat.rating > 0);
+    let satisfactionRating = 0;
+    
+    if (ratedChats.length > 0) {
+      const totalRating = ratedChats.reduce((sum, chat) => sum + chat.rating, 0);
+      satisfactionRating = parseFloat((totalRating / ratedChats.length).toFixed(1));
+    } else {
+      // Fallback: check visitor metadata for ratings
+      const visitorsWithRatings = await Visitor.findAll({
+        where: {
+          tenant_id: tenantId,
+          brand_id: { [Op.in]: assignedBrandIds },
+          assigned_agent_id: agentId,
+          metadata: {
+            [Op.like]: '%"rating"%'
+          }
+        },
+        attributes: ['metadata']
+      });
+      
+      if (visitorsWithRatings.length > 0) {
+        let totalRating = 0;
+        let ratingCount = 0;
+        
+        for (const visitor of visitorsWithRatings) {
+          try {
+            const metadata = typeof visitor.metadata === 'string' 
+              ? JSON.parse(visitor.metadata) 
+              : visitor.metadata;
+            if (metadata && metadata.rating && metadata.rating > 0) {
+              totalRating += metadata.rating;
+              ratingCount++;
+            }
+          } catch (e) {
+            // Skip invalid metadata
+          }
+        }
+        
+        if (ratingCount > 0) {
+          satisfactionRating = parseFloat((totalRating / ratingCount).toFixed(1));
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        activeChats: activeChatsCount,
+        openTickets: openTicketsCount,
+        activeVisitors: activeVisitorsCount,
+        averageResponseTime: averageResponseTime, // in seconds
+        satisfactionRating: satisfactionRating || 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get agent dashboard stats error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch dashboard statistics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // Helper function to generate activity descriptions
 function getActivityDescription(activity) {
   const data = activity.activity_data || {};
