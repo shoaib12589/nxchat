@@ -194,9 +194,9 @@ export default function AgentDashboard() {
           </div>
           <div>
             <div className="font-medium">
-              {chat.customer?.first_name} {chat.customer?.last_name}
+              {chat.customer?.name || chat.customer_name || 'Unknown Customer'}
             </div>
-            <div className="text-sm text-muted-foreground">{chat.customer?.email}</div>
+            <div className="text-sm text-muted-foreground">{chat.customer?.email || chat.customer_email || 'No email'}</div>
           </div>
         </div>
       ),
@@ -252,7 +252,7 @@ export default function AgentDashboard() {
           <div>
             <div className="font-medium">{value}</div>
             <div className="text-sm text-muted-foreground">
-              {ticket.customer?.first_name} {ticket.customer?.last_name}
+              {ticket.customer?.name || 'Unknown Customer'}
             </div>
           </div>
         </div>
