@@ -2458,7 +2458,10 @@ router.get('/visitor-history', authenticateToken, requireAgent, requireTenant, a
       page = 1, 
       limit = 50, 
       status = 'all',
-      search = ''
+      search = '',
+      startDate,
+      endDate,
+      source = 'all'
     } = req.query;
     
     const offset = (page - 1) * limit;
@@ -2480,6 +2483,56 @@ router.get('/visitor-history', authenticateToken, requireAgent, requireTenant, a
     if (status === 'completed') {
       // Only show visitors who completed a chat with an agent
       whereClause.assigned_agent_id = { [Op.ne]: null };
+    }
+
+    // Add date range filter
+    if (startDate || endDate) {
+      whereClause.last_activity = {};
+      if (startDate) {
+        whereClause.last_activity[Op.gte] = new Date(startDate);
+      }
+      if (endDate) {
+        // Set end date to end of day
+        const endDateObj = new Date(endDate);
+        endDateObj.setHours(23, 59, 59, 999);
+        whereClause.last_activity[Op.lte] = endDateObj;
+      }
+    }
+
+    // Add source filter
+    if (source && source !== 'all') {
+      // Build source filter conditions
+      let sourceConditions = [];
+      
+      if (source === 'direct') {
+        sourceConditions = [
+          { referrer: { [Op.is]: null } },
+          { referrer: 'Direct' },
+          { source: { [Op.is]: null } }
+        ];
+      } else if (source === 'google') {
+        sourceConditions = [
+          { source: 'google' },
+          { referrer: { [Op.like]: '%google%' } },
+          { search_engine: 'google' }
+        ];
+      } else if (source === 'organic') {
+        sourceConditions = [
+          { medium: 'organic' },
+          { source: { [Op.not]: ['direct', 'google', 'social', 'email', 'paid'] } }
+        ];
+      } else {
+        // For other sources (social, email, paid, etc.)
+        sourceConditions = [
+          { source: source },
+          { medium: source }
+        ];
+      }
+      
+      // Add source conditions to the AND clause
+      if (sourceConditions.length > 0) {
+        whereClause[Op.and].push({ [Op.or]: sourceConditions });
+      }
     }
 
     // Get agent's assigned brands - REQUIRED for agents
@@ -2572,6 +2625,10 @@ router.get('/visitor-history', authenticateToken, requireAgent, requireTenant, a
         visitsCount: visitor.visits_count || visitor.visitsCount || 1,
         createdAt: visitor.created_at || visitor.createdAt,
         referrer: visitor.referrer || 'Direct',
+        source: visitor.source || null,
+        medium: visitor.medium || null,
+        campaign: visitor.campaign || null,
+        searchEngine: visitor.search_engine || null,
         location: visitor.location || { country: 'Unknown', city: 'Unknown', region: 'Unknown' },
         device: visitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' }
       };

@@ -42,6 +42,9 @@ interface Visitor {
   status: 'online' | 'away' | 'offline' | 'idle' | 'waiting_for_agent';
   currentPage: string;
   referrer: string;
+  source?: string | null;
+  medium?: string | null;
+  searchEngine?: string | null;
   location: {
     country: string;
     city: string;
@@ -78,6 +81,10 @@ interface Visitor {
 interface VisitorFilters {
   status: string;
   search: string;
+  dateRange: 'today' | 'yesterday' | 'last_week' | 'this_month' | 'custom' | 'all';
+  startDate?: string;
+  endDate?: string;
+  source: string;
 }
 
 const HistoryPage: React.FC = () => {
@@ -88,7 +95,9 @@ const HistoryPage: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [filters, setFilters] = useState<VisitorFilters>({
     status: 'all',
-    search: ''
+    search: '',
+    dateRange: 'all',
+    source: 'all'
   });
 
   // Messages modal state
@@ -96,6 +105,42 @@ const HistoryPage: React.FC = () => {
   const [selectedVisitor, setSelectedVisitor] = useState<Visitor | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+
+  // Helper function to get date range based on filter
+  const getDateRange = (range: string) => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    switch (range) {
+      case 'today':
+        return {
+          startDate: today.toISOString().split('T')[0],
+          endDate: today.toISOString().split('T')[0]
+        };
+      case 'yesterday':
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        return {
+          startDate: yesterday.toISOString().split('T')[0],
+          endDate: yesterday.toISOString().split('T')[0]
+        };
+      case 'last_week':
+        const lastWeekStart = new Date(today);
+        lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+        return {
+          startDate: lastWeekStart.toISOString().split('T')[0],
+          endDate: today.toISOString().split('T')[0]
+        };
+      case 'this_month':
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        return {
+          startDate: monthStart.toISOString().split('T')[0],
+          endDate: today.toISOString().split('T')[0]
+        };
+      default:
+        return {};
+    }
+  };
 
   const fetchVisitors = useCallback(async () => {
     try {
@@ -105,7 +150,26 @@ const HistoryPage: React.FC = () => {
         setLoading(true);
       }
       
-      const response = await apiClient.getVisitorHistory(filters);
+      // Build query parameters
+      const queryParams: any = {
+        status: filters.status,
+        search: filters.search,
+        source: filters.source
+      };
+      
+      // Add date range if not 'all'
+      if (filters.dateRange !== 'all') {
+        if (filters.dateRange === 'custom') {
+          if (filters.startDate) queryParams.startDate = filters.startDate;
+          if (filters.endDate) queryParams.endDate = filters.endDate;
+        } else {
+          const dateRange = getDateRange(filters.dateRange);
+          if (dateRange.startDate) queryParams.startDate = dateRange.startDate;
+          if (dateRange.endDate) queryParams.endDate = dateRange.endDate;
+        }
+      }
+      
+      const response = await apiClient.getVisitorHistory(queryParams);
       
       if (response.success) {
         const transformedVisitors = response.data.map((visitor: any) => ({
@@ -120,8 +184,18 @@ const HistoryPage: React.FC = () => {
           device: visitor.device || { type: 'desktop', browser: 'Unknown', os: 'Unknown' },
           createdAt: visitor.created_at || visitor.createdAt,
           referrer: visitor.referrer || 'Direct',
-          brandName: visitor.brandName || visitor.brand?.name || 'No Brand'
+          brandName: visitor.brandName || visitor.brand?.name || 'No Brand',
+          source: visitor.source || null,
+          medium: visitor.medium || null,
+          searchEngine: visitor.searchEngine || visitor.search_engine || null
         }));
+        
+        // Sort by lastActivity descending (latest first) - backend already does this, but ensure it's correct
+        transformedVisitors.sort((a, b) => {
+          const dateA = new Date(a.lastActivity).getTime();
+          const dateB = new Date(b.lastActivity).getTime();
+          return dateB - dateA; // Descending order (latest first)
+        });
         
         setVisitors(transformedVisitors);
       } else {
@@ -168,12 +242,22 @@ const HistoryPage: React.FC = () => {
   };
 
   const formatDuration = (visitor: Visitor) => {
-    const duration = parseInt(visitor.sessionDuration);
-    if (!duration || duration === 0) return '0m';
-    if (duration < 60) return `${duration}m`;
-    const hours = Math.floor(duration / 60);
-    const minutes = duration % 60;
-    return `${hours}h ${minutes}m`;
+    // sessionDuration is stored in seconds
+    const durationInSeconds = parseInt(visitor.sessionDuration);
+    if (!durationInSeconds || durationInSeconds === 0) return '0s';
+    
+    // Convert seconds to hours, minutes, and seconds
+    const hours = Math.floor(durationInSeconds / 3600);
+    const minutes = Math.floor((durationInSeconds % 3600) / 60);
+    const seconds = durationInSeconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    } else {
+      return `${seconds}s`;
+    }
   };
 
   const getPageTitle = (url: string) => {
@@ -195,16 +279,59 @@ const HistoryPage: React.FC = () => {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    const config = {
-      left: { label: 'Left', className: 'bg-gray-100 text-gray-800' },
-      complete: { label: 'Complete', className: 'bg-green-100 text-green-800' },
-      'end_chat': { label: 'End Chat', className: 'bg-blue-100 text-blue-800' },
-      offline: { label: 'Offline', className: 'bg-slate-100 text-slate-800' }
-    };
+  const getStatusBadge = (visitor: Visitor) => {
+    // Determine status based on visitor data
+    let status = 'offline';
+    let label = 'Visitor Left';
+    let className = 'bg-gray-100 text-gray-800';
     
-    const statusConfig = config[status as keyof typeof config] || { label: status, className: 'bg-gray-100 text-gray-800' };
-    return <Badge className={statusConfig.className}>{statusConfig.label}</Badge>;
+    if (visitor.status === 'offline') {
+      // Check if visitor had an assigned agent (completed chat)
+      if (visitor.assignedAgent && visitor.assignedAgent.id) {
+        status = 'completed';
+        label = 'End Chat';
+        className = 'bg-blue-100 text-blue-800';
+      } else if (visitor.messagesCount > 0) {
+        // Had messages but no agent - AI Chat
+        status = 'ai_chat';
+        label = 'AI Chat';
+        className = 'bg-green-100 text-green-800';
+      } else {
+        // No agent, no messages - Visitor Left
+        status = 'left';
+        label = 'Visitor Left';
+        className = 'bg-slate-100 text-slate-800';
+      }
+    } else if (visitor.status === 'idle') {
+      status = 'end_chat';
+      label = 'End Chat';
+      className = 'bg-blue-100 text-blue-800';
+    }
+    
+    return <Badge className={className}>{label}</Badge>;
+  };
+
+  // Get source display name
+  const getSourceName = (visitor: Visitor) => {
+    if (visitor.source) {
+      return visitor.source.charAt(0).toUpperCase() + visitor.source.slice(1);
+    }
+    if (visitor.searchEngine) {
+      return visitor.searchEngine.charAt(0).toUpperCase() + visitor.searchEngine.slice(1);
+    }
+    if (visitor.referrer && visitor.referrer !== 'Direct') {
+      try {
+        const url = new URL(visitor.referrer);
+        const hostname = url.hostname.replace('www.', '');
+        if (hostname.includes('google')) return 'Google';
+        if (hostname.includes('bing')) return 'Bing';
+        if (hostname.includes('yahoo')) return 'Yahoo';
+        return hostname.split('.')[0].charAt(0).toUpperCase() + hostname.split('.')[0].slice(1);
+      } catch {
+        return visitor.referrer;
+      }
+    }
+    return 'Direct';
   };
 
   // Visitor categorization
@@ -433,8 +560,7 @@ const HistoryPage: React.FC = () => {
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Visitor</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Brand</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Viewing</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Referrer</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Messages</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Activity</th>
@@ -468,21 +594,7 @@ const HistoryPage: React.FC = () => {
 
                         {/* Status Column */}
                         <td className="px-4 py-3 whitespace-nowrap">
-                          {(() => {
-                            // Map visitor status to history status badges
-                            if (visitor.status === 'offline') {
-                              // Check if visitor had an assigned agent (completed chat)
-                              if (visitor.assignedAgent) {
-                                return <Badge className="bg-green-100 text-green-800">Complete</Badge>;
-                              } else {
-                                return <Badge className="bg-slate-100 text-slate-800">Offline</Badge>;
-                              }
-                            } else if (visitor.status === 'idle') {
-                              return <Badge className="bg-blue-100 text-blue-800">End Chat</Badge>;
-                            } else {
-                              return <Badge className="bg-gray-100 text-gray-800">Left</Badge>;
-                            }
-                          })()}
+                          {getStatusBadge(visitor)}
                         </td>
 
                         {/* Brand Column */}
@@ -492,25 +604,12 @@ const HistoryPage: React.FC = () => {
                           </span>
                         </td>
 
-                        {/* Viewing Column */}
-                        <td className="px-4 py-3">
-                          <div className="text-sm text-gray-900">
-                            {visitor.currentPage && visitor.currentPage !== 'Unknown page' ? (
-                              <span className="truncate block" title={visitor.currentPage}>
-                                {getPageTitle(visitor.currentPage)}
-                              </span>
-                            ) : (
-                              <span className="text-gray-500">Unknown page</span>
-                            )}
-                        </div>
-                        </td>
-
-                        {/* Referrer Column */}
+                        {/* Source Column */}
                         <td className="px-4 py-3 whitespace-nowrap">
                           <div className="flex items-center space-x-2">
                             <Search className="w-4 h-4 text-gray-400" />
-                            <span className="text-sm text-gray-500">
-                              {visitor.referrer === 'Direct' || !visitor.referrer ? '-' : visitor.referrer}
+                            <span className="text-sm text-gray-900 font-medium">
+                              {getSourceName(visitor)}
                             </span>
                           </div>
                         </td>

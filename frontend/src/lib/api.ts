@@ -384,7 +384,15 @@ class ApiClient {
     return response.data;
   }
 
-  async getVisitorHistory(params?: { status?: string; search?: string; page?: number; limit?: number }): Promise<ApiResponse> {
+  async getVisitorHistory(params?: { 
+    status?: string; 
+    search?: string; 
+    page?: number; 
+    limit?: number;
+    startDate?: string;
+    endDate?: string;
+    source?: string;
+  }): Promise<ApiResponse> {
     const response: AxiosResponse<ApiResponse> = await this.client.get('/agent/visitor-history', { params });
     return response.data;
   }
