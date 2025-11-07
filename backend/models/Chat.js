@@ -77,8 +77,9 @@ const Chat = sequelize.define('Chat', {
     type: DataTypes.INTEGER,
     allowNull: true,
     validate: {
-      min: 1,
-      max: 5
+      isIn: [[0, 1]], // 0 = thumbs-down, 1 = thumbs-up
+      min: 0,
+      max: 1
     }
   },
   rating_feedback: {

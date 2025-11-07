@@ -24,14 +24,23 @@ import {
   Clock, 
   MessageCircle, 
   Eye,
-  X
+  X,
+  Download,
+  ChevronDown
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { 
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { useAuthStore } from '@/stores/authStore';
 import apiClient from '@/lib/api';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
 
 interface Visitor {
     id: string;
@@ -235,6 +244,127 @@ const HistoryPage: React.FC = () => {
 
   const handleRefresh = () => {
     fetchVisitors();
+  };
+
+  const getStatusText = (visitor: Visitor): string => {
+    // Determine status based on visitor data
+    if (visitor.status === 'offline') {
+      // Check if visitor had an assigned agent (completed chat)
+      if (visitor.assignedAgent && visitor.assignedAgent.id) {
+        return 'End Chat';
+      } else if (visitor.messagesCount > 0) {
+        // Had messages but no agent - AI Chat
+        return 'AI Chat';
+      } else {
+        // No agent, no messages - Visitor Left
+        return 'Visitor Left';
+      }
+    } else if (visitor.status === 'idle') {
+      return 'End Chat';
+    }
+    return 'Visitor Left';
+  };
+
+  const exportToExcel = async (includeMessages: boolean) => {
+    try {
+      toast.info('Preparing export...');
+      
+      const historyVisitors = getHistoryVisitors();
+      
+      if (historyVisitors.length === 0) {
+        toast.error('No visitors to export');
+        return;
+      }
+
+      // Prepare data for export
+      const exportData: any[] = [];
+
+      for (const visitor of historyVisitors) {
+        const baseRow: any = {
+          'Visitor ID': visitor.id,
+          'Visitor Name': visitor.name || 'Anonymous Visitor',
+          'Email': visitor.email || '',
+          'Phone': visitor.phone || '',
+          'Status': getStatusText(visitor),
+          'Brand': visitor.brandName || visitor.brand?.name || 'No Brand',
+          'Source': getSourceName(visitor),
+          'Current Page': visitor.currentPage || 'Unknown page',
+          'Referrer': visitor.referrer || 'Direct',
+          'Location': `${visitor.location.city}, ${visitor.location.region}, ${visitor.location.country}`,
+          'Device Type': visitor.device.type,
+          'Browser': visitor.device.browser,
+          'OS': visitor.device.os,
+          'Session Duration': formatDuration(visitor),
+          'Messages Count': visitor.messagesCount || 0,
+          'Visits Count': visitor.visitsCount || 1,
+          'Last Activity': new Date(visitor.lastActivity).toLocaleString(),
+          'Created At': new Date(visitor.createdAt).toLocaleString(),
+          'Assigned Agent': visitor.assignedAgent?.name || 'None',
+          'Rating': visitor.rating !== undefined && visitor.rating !== null 
+            ? (visitor.rating === 1 ? 'Thumbs Up 👍' : 'Thumbs Down 👎')
+            : '',
+          'Rating Feedback': visitor.ratingFeedback || '',
+        };
+
+        if (includeMessages) {
+          // Fetch messages for this visitor
+          try {
+            const response = await apiClient.getVisitorMessages(visitor.id, { limit: 1000 });
+            if (response.success && response.data.messages) {
+              const messages = response.data.messages.reverse(); // Oldest first
+              const messagesText = messages.map((msg: any) => {
+                const sender = msg.sender === 'agent' ? 'Agent' : 
+                             msg.sender === 'ai' ? 'AI Assistant' :
+                             msg.sender === 'system' ? 'System' : 
+                             'Visitor';
+                const timestamp = new Date(msg.timestamp || msg.created_at).toLocaleString();
+                return `[${timestamp}] ${sender}: ${msg.content || msg.message || ''}`;
+              }).join('\n');
+              
+              baseRow['Messages'] = messagesText;
+              baseRow['Total Messages'] = messages.length;
+            } else {
+              baseRow['Messages'] = 'No messages available';
+              baseRow['Total Messages'] = 0;
+            }
+          } catch (error) {
+            console.error(`Error fetching messages for visitor ${visitor.id}:`, error);
+            baseRow['Messages'] = 'Error loading messages';
+            baseRow['Total Messages'] = 0;
+          }
+        }
+
+        exportData.push(baseRow);
+      }
+
+      // Create workbook and worksheet
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Visitor History');
+
+      // Auto-size columns
+      const maxWidth = 50;
+      const colWidths = Object.keys(exportData[0] || {}).map((key) => {
+        const maxLength = Math.max(
+          key.length,
+          ...exportData.map((row) => String(row[key] || '').length)
+        );
+        return { wch: Math.min(maxLength + 2, maxWidth) };
+      });
+      ws['!cols'] = colWidths;
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const filename = `visitor-history-${includeMessages ? 'with-messages' : 'without-messages'}-${timestamp}.xlsx`;
+
+      // Write file
+      XLSX.writeFile(wb, filename);
+      
+      toast.success(`Exported ${historyVisitors.length} visitors successfully`);
+    } catch (error: any) {
+      console.error('Export error:', error);
+      toast.error(error.message || 'Failed to export chats');
+    }
   };
 
   const handleViewMessages = async (visitor: Visitor) => {
@@ -535,6 +665,29 @@ const HistoryPage: React.FC = () => {
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex items-center space-x-2"
+              >
+                <Download className="w-4 h-4" />
+                <span>Export Chats</span>
+                <ChevronDown className="w-4 h-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => exportToExcel(true)}>
+                <MessageCircle className="w-4 h-4 mr-2" />
+                Export with messages
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => exportToExcel(false)}>
+                <Download className="w-4 h-4 mr-2" />
+                Export without messages
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -783,22 +936,32 @@ const HistoryPage: React.FC = () => {
         
         <div className="flex-1 overflow-y-auto p-4 bg-gray-50 rounded-lg border border-gray-200">
           {/* Rating Display */}
-          {selectedVisitor?.rating && (
-            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          {selectedVisitor?.rating !== undefined && selectedVisitor?.rating !== null && (
+            <div className={`mb-6 p-4 rounded-lg border ${
+              selectedVisitor.rating === 1 
+                ? 'bg-green-50 border-green-200' 
+                : 'bg-red-50 border-red-200'
+            }`}>
               <div className="flex items-center space-x-2 mb-2">
-                <span className="text-lg">⭐</span>
-                <h4 className="font-semibold text-yellow-900">Visitor Rating</h4>
-              </div>
-              <div className="flex items-center space-x-1 mb-2">
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <span key={star} className={star <= selectedVisitor.rating! ? 'text-yellow-400' : 'text-gray-300'}>
-                    ★
-                  </span>
-                ))}
-                <span className="text-sm text-yellow-800 ml-2">({selectedVisitor.rating}/5)</span>
+                <span className="text-2xl">
+                  {selectedVisitor.rating === 1 ? '👍' : '👎'}
+                </span>
+                <h4 className={`font-semibold ${
+                  selectedVisitor.rating === 1 
+                    ? 'text-green-900' 
+                    : 'text-red-900'
+                }`}>
+                  Visitor Rating: {selectedVisitor.rating === 1 ? 'Thumbs Up' : 'Thumbs Down'}
+                </h4>
               </div>
               {selectedVisitor.ratingFeedback && (
-                <p className="text-sm text-yellow-800 italic mt-2">"{selectedVisitor.ratingFeedback}"</p>
+                <p className={`text-sm italic mt-2 ${
+                  selectedVisitor.rating === 1 
+                    ? 'text-green-800' 
+                    : 'text-red-800'
+                }`}>
+                  "{selectedVisitor.ratingFeedback}"
+                </p>
               )}
             </div>
           )}

@@ -2191,49 +2191,16 @@ router.get('/dashboard/stats', authenticateToken, requireAgent, requireTenant, a
     }
     
     // Calculate satisfaction rating from chat ratings (most reliable source)
-    const ratedChats = completedChats.filter(chat => chat.rating && chat.rating > 0);
-    let satisfactionRating = 0;
+    // Include both thumbs-up (1) and thumbs-down (0) ratings
+    const ratedChats = completedChats.filter(chat => chat.rating !== null && chat.rating !== undefined && (chat.rating === 0 || chat.rating === 1));
+    let satisfactionRating = 0; // Percentage of thumbs-up (0-100)
     
     if (ratedChats.length > 0) {
-      const totalRating = ratedChats.reduce((sum, chat) => sum + chat.rating, 0);
-      satisfactionRating = parseFloat((totalRating / ratedChats.length).toFixed(1));
-    } else {
-      // Fallback: check visitor metadata for ratings
-      const visitorsWithRatings = await Visitor.findAll({
-        where: {
-          tenant_id: tenantId,
-          brand_id: { [Op.in]: assignedBrandIds },
-          assigned_agent_id: agentId,
-          metadata: {
-            [Op.like]: '%"rating"%'
-          }
-        },
-        attributes: ['metadata']
-      });
-      
-      if (visitorsWithRatings.length > 0) {
-        let totalRating = 0;
-        let ratingCount = 0;
-        
-        for (const visitor of visitorsWithRatings) {
-          try {
-            const metadata = typeof visitor.metadata === 'string' 
-              ? JSON.parse(visitor.metadata) 
-              : visitor.metadata;
-            if (metadata && metadata.rating && metadata.rating > 0) {
-              totalRating += metadata.rating;
-              ratingCount++;
-            }
-          } catch (e) {
-            // Skip invalid metadata
-          }
-        }
-        
-        if (ratingCount > 0) {
-          satisfactionRating = parseFloat((totalRating / ratingCount).toFixed(1));
-        }
-      }
+      // Count thumbs-up (rating === 1) vs total ratings
+      const thumbsUpCount = ratedChats.filter(chat => chat.rating === 1).length;
+      satisfactionRating = parseFloat(((thumbsUpCount / ratedChats.length) * 100).toFixed(1));
     }
+    // Note: Ratings are stored in Chat model, not Visitor metadata, so no fallback needed
     
     res.json({
       success: true,

@@ -437,9 +437,9 @@ export default function AgentDashboard() {
                 </motion.div>
               <div>
                   <div className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">
-                    {stats.satisfactionRating > 0 ? stats.satisfactionRating.toFixed(1) : 'N/A'}
+                    {stats.satisfactionRating > 0 ? `${stats.satisfactionRating}%` : 'N/A'}
                   </div>
-                <div className="text-sm text-muted-foreground">Satisfaction</div>
+                <div className="text-sm text-muted-foreground">Thumbs Up Rate</div>
               </div>
             </div>
           </CardContent>

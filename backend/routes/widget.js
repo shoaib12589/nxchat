@@ -1918,21 +1918,17 @@ router.post('/visitor/submit-rating', async (req, res) => {
       });
     }
 
-    // Validate rating
-    if (rating < 1 || rating > 5) {
+    // Validate rating (0 = thumbs-down, 1 = thumbs-up)
+    if (rating !== 0 && rating !== 1) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Rating must be between 1 and 5' 
+        message: 'Rating must be 0 (thumbs-down) or 1 (thumbs-up)' 
       });
     }
 
     // Find the visitor and get associated chat
     const visitor = await Visitor.findOne({
-      where: { id: visitorId, tenant_id: tenantId },
-      include: [{
-        model: require('../models').Chat,
-        as: 'chats'
-      }]
+      where: { id: visitorId, tenant_id: tenantId }
     });
 
     if (!visitor) {
@@ -1942,16 +1938,27 @@ router.post('/visitor/submit-rating', async (req, res) => {
       });
     }
 
-    // Update chat rating and feedback if chat exists
-    // For now, we'll store it in visitor metadata
-    await visitor.update({
-      metadata: {
-        ...(visitor.metadata || {}),
-        rating: rating,
-        feedback: feedback,
-        ratedAt: new Date().toISOString()
-      }
+    // Find and update associated chat with rating
+    const { Chat } = require('../models');
+    const chat = await Chat.findOne({
+      where: {
+        customer_id: visitor.customer_id || visitor.id,
+        tenant_id: tenantId,
+        status: { [require('sequelize').Op.in]: ['waiting', 'active', 'completed', 'visitor_left', 'closed'] }
+      },
+      order: [['created_at', 'DESC']],
+      limit: 1
     });
+    
+    if (chat) {
+      await chat.update({
+        rating: rating,
+        rating_feedback: feedback
+      });
+      console.log('Updated chat rating:', chat.id, { rating, hasFeedback: !!feedback });
+    } else {
+      console.log('No chat found for visitor:', visitorId, '- rating not stored in chat');
+    }
 
     console.log('Rating submitted:', { visitorId, rating, hasFeedback: !!feedback });
     

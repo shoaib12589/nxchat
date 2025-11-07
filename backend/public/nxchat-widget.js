@@ -133,6 +133,34 @@ let onlineAgents = []; // Store online agents with avatars
   let sendButton = null;
   let toggleButton = null;
 
+  // Detect if device is mobile
+  function isMobileDevice() {
+    return window.innerWidth <= 768 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  }
+
+  // Get responsive widget dimensions
+  function getWidgetDimensions() {
+    const isMobile = isMobileDevice();
+    
+    if (isMobile) {
+      // Mobile: fixed size that fits mobile screens
+      return {
+        width: 'calc(100vw - 40px)',
+        height: 'calc(100vh - 100px)',
+        maxWidth: '100vw',
+        maxHeight: '100vh'
+      };
+    } else {
+      // Desktop: auto-fit height to screen
+      return {
+        width: '350px',
+        height: 'calc(100vh - 40px)',
+        maxWidth: '350px',
+        maxHeight: 'calc(100vh - 40px)'
+      };
+    }
+  }
+
   // Initialize widget
   async function initWidget(tenantId) {
     // Initialize URLs first
@@ -982,25 +1010,57 @@ let onlineAgents = []; // Store online agents with avatars
 
   // Create widget HTML
   function createWidgetHTML() {
+    // Get responsive dimensions
+    const dimensions = getWidgetDimensions();
+    const isMobile = isMobileDevice();
+    
     // Create main container
     widgetContainer = document.createElement('div');
     widgetContainer.id = 'nxchat-widget';
     widgetContainer.className = 'nxchat-widget';
-    widgetContainer.style.cssText = `
-      position: fixed;
-      ${CONFIG.theme.position.includes('right') ? 'right: 20px;' : 'left: 20px;'}
-      ${CONFIG.theme.position.includes('bottom') ? 'bottom: 10px;' : 'top: 10px;'}
-      width: 350px;
-      height: 600px;
-      background: white;
-      border-radius: 16px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
-      z-index: 10002;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      display: none;
-      flex-direction: column;
-      overflow: hidden;
-    `;
+    
+    // Apply responsive positioning and sizing
+    if (isMobile) {
+      // Mobile: center and fill most of screen
+      widgetContainer.style.cssText = `
+        position: fixed;
+        top: 50px;
+        left: 20px;
+        right: 20px;
+        bottom: 50px;
+        width: ${dimensions.width};
+        height: ${dimensions.height};
+        max-width: ${dimensions.maxWidth};
+        max-height: ${dimensions.maxHeight};
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+        z-index: 10002;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        display: none;
+        flex-direction: column;
+        overflow: hidden;
+      `;
+    } else {
+      // Desktop: position based on config, auto-fit height
+      widgetContainer.style.cssText = `
+        position: fixed;
+        ${CONFIG.theme.position.includes('right') ? 'right: 20px;' : 'left: 20px;'}
+        ${CONFIG.theme.position.includes('bottom') ? 'bottom: 20px;' : 'top: 20px;'}
+        width: ${dimensions.width};
+        height: ${dimensions.height};
+        max-width: ${dimensions.maxWidth};
+        max-height: ${dimensions.maxHeight};
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+        z-index: 10002;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        display: none;
+        flex-direction: column;
+        overflow: hidden;
+      `;
+    }
 
     // Create toggle button
     toggleButton = document.createElement('div');
@@ -2290,6 +2350,41 @@ let onlineAgents = []; // Store online agents with avatars
     // Send button
     sendButton.addEventListener('click', sendMessage);
     
+    // Window resize listener to update widget dimensions
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+      // Debounce resize events
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        if (isOpen && widgetContainer) {
+          // Update dimensions when window is resized
+          const dimensions = getWidgetDimensions();
+          const isMobile = isMobileDevice();
+          
+          if (isMobile) {
+            widgetContainer.style.width = dimensions.width;
+            widgetContainer.style.height = dimensions.height;
+            widgetContainer.style.maxWidth = dimensions.maxWidth;
+            widgetContainer.style.maxHeight = dimensions.maxHeight;
+            widgetContainer.style.top = '50px';
+            widgetContainer.style.left = '20px';
+            widgetContainer.style.right = '20px';
+            widgetContainer.style.bottom = '50px';
+          } else {
+            widgetContainer.style.width = dimensions.width;
+            widgetContainer.style.height = dimensions.height;
+            widgetContainer.style.maxWidth = dimensions.maxWidth;
+            widgetContainer.style.maxHeight = dimensions.maxHeight;
+            // Restore position based on config
+            widgetContainer.style.top = CONFIG.theme.position.includes('bottom') ? 'auto' : '20px';
+            widgetContainer.style.bottom = CONFIG.theme.position.includes('bottom') ? '20px' : 'auto';
+            widgetContainer.style.left = CONFIG.theme.position.includes('right') ? 'auto' : '20px';
+            widgetContainer.style.right = CONFIG.theme.position.includes('right') ? '20px' : 'auto';
+          }
+        }
+      }, 250); // Debounce for 250ms
+    });
+    
     // Input field
     inputField.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') {
@@ -2407,6 +2502,33 @@ let onlineAgents = []; // Store online agents with avatars
     if (isOpen) {
       // Track widget open
       trackVisitorActivity('widget_open');
+      
+      // Update dimensions when opening (in case screen size changed)
+      const dimensions = getWidgetDimensions();
+      const isMobile = isMobileDevice();
+      
+      if (isMobile) {
+        // Mobile: update to fixed mobile size
+        widgetContainer.style.width = dimensions.width;
+        widgetContainer.style.height = dimensions.height;
+        widgetContainer.style.maxWidth = dimensions.maxWidth;
+        widgetContainer.style.maxHeight = dimensions.maxHeight;
+        widgetContainer.style.top = '50px';
+        widgetContainer.style.left = '20px';
+        widgetContainer.style.right = '20px';
+        widgetContainer.style.bottom = '50px';
+      } else {
+        // Desktop: update to auto-fit height
+        widgetContainer.style.width = dimensions.width;
+        widgetContainer.style.height = dimensions.height;
+        widgetContainer.style.maxWidth = dimensions.maxWidth;
+        widgetContainer.style.maxHeight = dimensions.maxHeight;
+        // Restore position based on config
+        widgetContainer.style.top = CONFIG.theme.position.includes('bottom') ? 'auto' : '20px';
+        widgetContainer.style.bottom = CONFIG.theme.position.includes('bottom') ? '20px' : 'auto';
+        widgetContainer.style.left = CONFIG.theme.position.includes('right') ? 'auto' : '20px';
+        widgetContainer.style.right = CONFIG.theme.position.includes('right') ? '20px' : 'auto';
+      }
       
       // Show widget with animation
       widgetContainer.style.display = 'flex';
@@ -2809,19 +2931,38 @@ let onlineAgents = []; // Store online agents with avatars
         <p style="margin: 0; font-size: 14px; color: #666;">Your feedback helps us improve</p>
       </div>
       
-      <!-- Star Rating -->
-      <div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; pointer-events: auto;">
-        ${[1, 2, 3, 4, 5].map(star => `
-          <button type="button" class="rating-star" data-rating="${star}" style="
-            background: none;
-            border: none;
-            font-size: 32px;
-            cursor: pointer;
-            color: #ddd;
-            transition: color 0.2s;
-            pointer-events: auto;
-          ">★</button>
-        `).join('')}
+      <!-- Thumbs Rating -->
+      <div style="display: flex; justify-content: center; gap: 24px; margin-bottom: 20px; pointer-events: auto;">
+        <button type="button" class="rating-thumb" data-rating="1" style="
+          background: none;
+          border: 2px solid #ddd;
+          border-radius: 50%;
+          width: 64px;
+          height: 64px;
+          font-size: 32px;
+          cursor: pointer;
+          color: #ddd;
+          transition: all 0.2s;
+          pointer-events: auto;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        ">👍</button>
+        <button type="button" class="rating-thumb" data-rating="0" style="
+          background: none;
+          border: 2px solid #ddd;
+          border-radius: 50%;
+          width: 64px;
+          height: 64px;
+          font-size: 32px;
+          cursor: pointer;
+          color: #ddd;
+          transition: all 0.2s;
+          pointer-events: auto;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        ">👎</button>
       </div>
 
       <!-- Feedback Textarea -->
@@ -2875,36 +3016,47 @@ let onlineAgents = []; // Store online agents with avatars
       messageContainer.scrollTop = messageContainer.scrollHeight;
     }, 100);
 
-    // Handle star rating clicks
-    let selectedRating = 0;
-    const stars = ratingForm.querySelectorAll('.rating-star');
+    // Handle thumbs rating clicks
+    let selectedRating = null;
+    const thumbs = ratingForm.querySelectorAll('.rating-thumb');
     
-    stars.forEach((star, index) => {
-      star.addEventListener('mouseover', function() {
-        highlightStars(index + 1, '#ffc107');
+    thumbs.forEach((thumb) => {
+      const rating = parseInt(thumb.getAttribute('data-rating'));
+      
+      thumb.addEventListener('mouseover', function() {
+        if (selectedRating === null || selectedRating === rating) {
+          thumb.style.borderColor = rating === 1 ? '#4ade80' : '#f87171';
+          thumb.style.color = rating === 1 ? '#4ade80' : '#f87171';
+          thumb.style.transform = 'scale(1.1)';
+        }
       });
       
-      star.addEventListener('mouseout', function() {
-        highlightStars(selectedRating, '#dddddd');
+      thumb.addEventListener('mouseout', function() {
+        if (selectedRating !== rating) {
+          thumb.style.borderColor = '#ddd';
+          thumb.style.color = '#ddd';
+          thumb.style.transform = 'scale(1)';
+        }
       });
       
       const select = () => {
-        selectedRating = index + 1;
-        highlightStars(selectedRating, '#ffc107');
+        // Reset all thumbs
+        thumbs.forEach(t => {
+          t.style.borderColor = '#ddd';
+          t.style.color = '#ddd';
+          t.style.transform = 'scale(1)';
+        });
+        
+        // Highlight selected thumb
+        selectedRating = rating;
+        thumb.style.borderColor = rating === 1 ? '#22c55e' : '#ef4444';
+        thumb.style.color = rating === 1 ? '#22c55e' : '#ef4444';
+        thumb.style.transform = 'scale(1.1)';
       };
-      star.addEventListener('click', select);
-      star.addEventListener('touchstart', (e) => { e.preventDefault(); select(); });
+      
+      thumb.addEventListener('click', select);
+      thumb.addEventListener('touchstart', (e) => { e.preventDefault(); select(); });
     });
-
-    function highlightStars(count, color) {
-      stars.forEach((star, index) => {
-        if (index < count) {
-          star.style.color = color;
-        } else {
-          star.style.color = '#dddddd';
-        }
-      });
-    }
 
     // Handle skip button click
     document.getElementById('skip-rating').addEventListener('click', function() {
@@ -2945,7 +3097,7 @@ let onlineAgents = []; // Store online agents with avatars
     document.getElementById('submit-rating').addEventListener('click', function() {
       const feedback = document.getElementById('rating-feedback').value;
       
-      if (selectedRating === 0) {
+      if (selectedRating === null) {
         alert('Please select a rating');
         return;
       }
